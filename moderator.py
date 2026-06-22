@@ -212,6 +212,42 @@ TRIBE_GUIDANCE: Dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Few-shot examples
+# Five labelled cases that calibrate decision boundaries and reinforce the
+# bare-JSON output format. Kept in the system prompt (trusted content).
+# ---------------------------------------------------------------------------
+
+FEW_SHOT_EXAMPLES = """
+LABELLED EXAMPLES — use these to calibrate your decisions:
+
+<example>
+Comment: "Has anyone dealt with condensation problems in their HMO? Getting tenant complaints and not sure if it's a maintenance issue or a lifestyle one. I have a dehumidifier ready but want to understand my obligations first."
+Decision: {"decision": "approved", "confidence": 0.97, "reasoning": "Genuine HMO management question seeking practical advice on a common landlord obligation. Clearly on-topic.", "rejection_category": "none"}
+</example>
+
+<example>
+Comment: "Absolute nightmare tenant — 3 months rent arrears, claiming the boiler was broken when it clearly wasn't (I have the engineer's report). Now threatening a Section 82 notice. How do I accelerate an eviction given the new rules?"
+Decision: {"decision": "approved", "confidence": 0.93, "reasoning": "Frustrated landlord seeking legal guidance on a genuine dispute. Strong language is normal in a Problem Tenants context and the question is entirely on-topic.", "rejection_category": "none"}
+</example>
+
+<example>
+Comment: "🔥 STOP OVERPAYING FOR PROPERTY LEADS! 50+ off-market deals/month guaranteed. Only £199/month — limited spots, DM me NOW before they're gone! 🔥"
+Decision: {"decision": "rejected", "confidence": 0.99, "reasoning": "Undisclosed commercial spam using pressure tactics ('limited spots', 'DM me NOW'). No affiliation disclosed. Explicitly the type of content PropertyTribes flags as marketing abuse.", "rejection_category": "spam"}
+</example>
+
+<example>
+Comment: "People like [ethnic group] shouldn't be allowed to own property in this country. They're driving real British families out of the market."
+Decision: {"decision": "rejected", "confidence": 1.0, "reasoning": "Hate speech targeting an ethnic group. No forum context makes this acceptable.", "rejection_category": "hate_speech"}
+</example>
+
+<example>
+Comment: "I wrote a guide on Article 4 HMO licensing after getting caught out in my area — happy to share the PDF if useful. I do run a small consultancy on the side, but this is just me giving back to the community."
+Decision: {"decision": "flagged_for_review", "confidence": 0.61, "reasoning": "Borderline self-promotion. Affiliation is disclosed but vague — 'consultancy on the side' could mean the PDF is a lead-generation tool or genuine knowledge-sharing. Needs human review.", "rejection_category": "none"}
+</example>
+""".strip()
+
+
 def _normalize(name: str) -> str:
     """Lowercase and collapse non-alphanumeric characters for fuzzy tribe matching."""
     return re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
@@ -251,11 +287,11 @@ async def moderate_comment(comment: str, tribe: Optional[str] = None) -> Dict[st
     if tribe:
         tribe_note = _get_tribe_guidance(tribe)
         if tribe_note:
-            system_content = f"{FORUM_CONTEXT}\n\nTRIBE-SPECIFIC RULES for '{tribe}':\n{tribe_note}"
+            system_content = f"{FORUM_CONTEXT}\n\n{FEW_SHOT_EXAMPLES}\n\nTRIBE-SPECIFIC RULES for '{tribe}':\n{tribe_note}"
         else:
-            system_content = f"{FORUM_CONTEXT}\n\nThis comment was posted in the '{tribe}' tribe. Apply standard PropertyTribes moderation guidelines for this topic area."
+            system_content = f"{FORUM_CONTEXT}\n\n{FEW_SHOT_EXAMPLES}\n\nThis comment was posted in the '{tribe}' tribe. Apply standard PropertyTribes moderation guidelines for this topic area."
     else:
-        system_content = FORUM_CONTEXT
+        system_content = f"{FORUM_CONTEXT}\n\n{FEW_SHOT_EXAMPLES}"
 
     prompt = f"""
 A user has submitted the following comment to the PropertyTribes forum.

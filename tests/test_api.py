@@ -182,6 +182,23 @@ class TestModerateEdgeCases:
         assert resp.status_code == 200
         assert resp.json()["decision"] == "flagged_for_review"
 
+    def test_few_shot_examples_in_system_prompt(self):
+        """Few-shot examples covering all three decision types are present in the system prompt."""
+        from unittest.mock import AsyncMock, MagicMock
+        mock_msg = MagicMock()
+        mock_msg.stop_reason = "end_turn"
+        mock_msg.content = [MagicMock(text='{"decision": "approved", "confidence": 0.9, "reasoning": "Fine.", "rejection_category": "none"}')]
+        with patch("moderator._get_client") as mock_client:
+            mock_client.return_value.messages.create = AsyncMock(return_value=mock_msg)
+            client.post("/moderate", json={"comment": "test"})
+            system = mock_client.return_value.messages.create.call_args.kwargs["system"]
+        # All three decision types must be demonstrated so the model sees each boundary
+        assert "approved" in system
+        assert "rejected" in system
+        assert "flagged_for_review" in system
+        # The labelled examples section must be present
+        assert "LABELLED EXAMPLES" in system
+
     def test_prompt_injection_attempt_handled(self):
         """Adversarial input attempting to override moderation rules is evaluated, not obeyed.
         Also verifies the hardening instruction is present in the prompt sent to Claude."""

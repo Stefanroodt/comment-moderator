@@ -196,8 +196,11 @@ comment-moderator/
 ## What I'd change with more time
 
 - **Persistent storage** — SQLite would be fine for this scale, Postgres if it needs to grow
-- **Auth on the admin endpoint** — right now anyone can override any decision, which is obviously not fine in production
-- **Background webhook delivery** — currently it fires inline which adds a small amount of latency. Easy fix with FastAPI's `BackgroundTasks`
-- **Appeal expiry** — probably shouldn't allow appeals on 6-month-old rejections
+- **Auth on `/log`, `/stats`, and the admin endpoint** — all three are currently open; anyone who can reach the API can read every user's comments and override decisions. A single API-key header check would close this
+- **Fail-fast startup check** — if `ANTHROPIC_API_KEY` is missing, the first request dies with a vague 500. Checking at startup (FastAPI lifespan or a module-level guard) surfaces a clear error immediately
+- **Background webhook delivery** — currently fires inline, adding the webhook's latency to the `/moderate` response. Easy fix with FastAPI's `BackgroundTasks`
+- **Appeal expiry** — probably shouldn't allow appeals on rejections older than 30 days
+- **Two-tier model** — run Haiku for clear-cut cases and escalate only `flagged_for_review` to Sonnet for a second opinion before involving a human moderator
+- **Comment hash cache** — identical resubmissions currently re-call the model; a content hash → decision cache would save cost and guarantee the same answer for the same text
 - **Confidence tracking over time** — comparing AI decisions vs human overrides would give useful signal for prompt tuning
 - **Redis for horizontal scaling** — the in-memory store and rate-limiter windows aren't shared across processes, so running multiple workers requires an external store

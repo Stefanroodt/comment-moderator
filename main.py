@@ -14,7 +14,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 load_dotenv()
@@ -336,17 +336,22 @@ async def admin_override(comment_id: str, body: AdminOverrideRequest) -> Dict[st
     status_code=status.HTTP_200_OK,
     summary="Moderation statistics",
 )
-async def get_stats() -> ModerationStats:
+async def get_stats(
+    since: Optional[datetime] = None,
+) -> ModerationStats:
     """
-    Returns aggregate statistics across all moderation decisions:
+    Returns aggregate statistics across all moderation decisions.
 
     - **Decision breakdown** — counts and percentages for approved / rejected / flagged
-    - **Average confidence** — mean AI confidence score across all decisions
-    - **Top rejection categories** — ranked by frequency (spam, promotional, etc.)
+    - **Average confidence** — mean AI confidence score (`null` when no data)
+    - **Top rejection categories** — top 5 ranked by frequency (spam, promotional, etc.)
     - **Appeal stats** — total appeals, overturn rate, upheld rate
     - **Admin overrides** — number of human moderator interventions
+
+    Use the optional `since` query parameter (ISO 8601 datetime) to scope stats
+    to a time window, e.g. `GET /stats?since=2024-11-15T00:00:00Z` for today's activity.
     """
-    return ModerationStats(**store.stats())
+    return ModerationStats(**store.stats(since=since))
 
 
 # ---------------------------------------------------------------------------

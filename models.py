@@ -166,10 +166,13 @@ class ModerationStats(BaseModel):
     total_comments: int = Field(..., description="Total comments submitted for moderation.")
     decisions: DecisionBreakdown
     decision_percentages: DecisionPercentages
-    avg_confidence: float = Field(..., description="Average AI confidence score across all decisions (0–1).")
+    avg_confidence: Optional[float] = Field(
+        None,
+        description="Average AI confidence score across all decisions (0–1). Null when no data.",
+    )
     top_rejection_categories: Dict[str, int] = Field(
         ...,
-        description="Rejection category counts, sorted by frequency descending. Excludes 'none'.",
+        description="Top 5 rejection category counts, sorted by frequency descending. Excludes 'none'.",
     )
     appeals: AppealStats
     admin_overrides: int = Field(..., description="Number of decisions manually overridden by an admin.")

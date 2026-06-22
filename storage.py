@@ -92,23 +92,31 @@ class ModerationStore:
         with self._lock:
             return len(self._entries)
 
-    def stats(self) -> dict:
-        """Compute aggregate moderation statistics over all stored entries."""
+    def stats(self, since: Optional[datetime] = None) -> dict:
+        """Compute aggregate moderation statistics over all stored entries.
+
+        Args:
+            since: If provided, only include entries on or after this datetime.
+        """
         with self._lock:
             entries = list(self._entries.values())
 
+        if since is not None:
+            # Normalise to UTC-aware for safe comparison
+            since_utc = since.replace(tzinfo=timezone.utc) if since.tzinfo is None else since
+            entries = [e for e in entries if e.timestamp >= since_utc]
+
         total = len(entries)
-        empty_stats: dict = {
-            "total_comments": 0,
-            "decisions": {"approved": 0, "rejected": 0, "flagged_for_review": 0},
-            "decision_percentages": {"approved": 0.0, "rejected": 0.0, "flagged_for_review": 0.0},
-            "avg_confidence": 0.0,
-            "top_rejection_categories": {},
-            "appeals": {"total": 0, "overturned": 0, "upheld": 0, "overturn_rate": 0.0},
-            "admin_overrides": 0,
-        }
         if total == 0:
-            return empty_stats
+            return {
+                "total_comments": 0,
+                "decisions": {"approved": 0, "rejected": 0, "flagged_for_review": 0},
+                "decision_percentages": {"approved": 0.0, "rejected": 0.0, "flagged_for_review": 0.0},
+                "avg_confidence": None,  # null — no data, not zero confidence
+                "top_rejection_categories": {},
+                "appeals": {"total": 0, "overturned": 0, "upheld": 0, "overturn_rate": 0.0},
+                "admin_overrides": 0,
+            }
 
         decisions: dict = {"approved": 0, "rejected": 0, "flagged_for_review": 0}
         categories: dict = {}
@@ -134,14 +142,18 @@ class ModerationStore:
                 admin_overrides += 1
 
         overturn_rate = round(appeals_overturned / appeals_total, 3) if appeals_total > 0 else 0.0
-        sorted_categories = dict(sorted(categories.items(), key=lambda x: x[1], reverse=True))
+
+        # Cap at top 5 — beyond that the signal-to-noise ratio drops significantly
+        top_categories = dict(
+            sorted(categories.items(), key=lambda x: x[1], reverse=True)[:5]
+        )
 
         return {
             "total_comments": total,
             "decisions": decisions,
             "decision_percentages": {k: round(v / total * 100, 1) for k, v in decisions.items()},
             "avg_confidence": round(sum(confidences) / len(confidences), 3),
-            "top_rejection_categories": sorted_categories,
+            "top_rejection_categories": top_categories,
             "appeals": {
                 "total": appeals_total,
                 "overturned": appeals_overturned,

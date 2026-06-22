@@ -385,13 +385,14 @@ class TestWebhook:
 class TestStats:
 
     def test_empty_stats(self):
-        """Stats on an empty store returns all zeros."""
+        """Stats on an empty store returns zeros and null confidence."""
         resp = client.get("/stats")
         assert resp.status_code == 200
         data = resp.json()
         assert data["total_comments"] == 0
         assert data["decisions"] == {"approved": 0, "rejected": 0, "flagged_for_review": 0}
-        assert data["avg_confidence"] == 0.0
+        # avg_confidence must be null (not 0.0) so callers can tell "no data" from "zero confidence"
+        assert data["avg_confidence"] is None
         assert data["top_rejection_categories"] == {}
         assert data["appeals"]["total"] == 0
         assert data["appeals"]["overturn_rate"] == 0.0
@@ -488,3 +489,66 @@ class TestStats:
 
         data = client.get("/stats").json()
         assert data["admin_overrides"] == 1
+
+    def test_top_rejection_categories_capped_at_five(self):
+        """top_rejection_categories never returns more than 5 entries."""
+        from models import RejectionCategory
+        categories = [
+            RejectionCategory.SPAM,
+            RejectionCategory.PROMOTIONAL,
+            RejectionCategory.HATE_SPEECH,
+            RejectionCategory.MISINFORMATION,
+            RejectionCategory.OFF_TOPIC,
+            RejectionCategory.ABUSIVE,
+        ]
+        for i, cat in enumerate(categories):
+            result = {**REJECTED_RESULT, "rejection_category": cat}
+            with patch("main.moderate_comment", return_value=result):
+                client.post("/moderate", json={"user_id": f"u{i}", "comment": f"bad comment {i}"})
+
+        data = client.get("/stats").json()
+        assert len(data["top_rejection_categories"]) <= 5
+
+    def test_since_filter_excludes_old_entries(self):
+        """The since parameter scopes stats to entries on or after the given datetime."""
+        from datetime import timezone
+        from storage import store
+        from models import LogEntry, ModerationDecision, RejectionCategory
+        from uuid import uuid4
+
+        # Inject an old entry directly into the store
+        old_entry = LogEntry(
+            comment_id=uuid4(),
+            user_id="old_user",
+            comment="old comment",
+            decision=ModerationDecision.REJECTED,
+            confidence=0.9,
+            reasoning="spam",
+            rejection_category=RejectionCategory.SPAM,
+            timestamp=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        )
+        store.add(old_entry)
+
+        # Add a recent entry via the API
+        with patch("main.moderate_comment", return_value=APPROVED_RESULT):
+            client.post("/moderate", json={"user_id": "new_user", "comment": "new good post"})
+
+        # Stats without filter → both entries
+        all_data = client.get("/stats").json()
+        assert all_data["total_comments"] == 2
+
+        # Stats with since=2024-01-01 → only the recent entry
+        recent_data = client.get("/stats?since=2024-01-01T00:00:00Z").json()
+        assert recent_data["total_comments"] == 1
+        assert recent_data["decisions"]["approved"] == 1
+        assert recent_data["decisions"]["rejected"] == 0
+
+    def test_since_filter_empty_window_returns_null_confidence(self):
+        """When since filters out all entries, avg_confidence is null not 0.0."""
+        with patch("main.moderate_comment", return_value=APPROVED_RESULT):
+            client.post("/moderate", json={"user_id": "u1", "comment": "old post"})
+
+        # Far-future since → no entries match
+        data = client.get("/stats?since=2099-01-01T00:00:00Z").json()
+        assert data["total_comments"] == 0
+        assert data["avg_confidence"] is None

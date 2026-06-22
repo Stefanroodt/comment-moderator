@@ -25,9 +25,6 @@ load_dotenv()
 import anthropic
 from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
 from models import (
     AdminOverrideRequest,
@@ -62,12 +59,6 @@ logger = logging.getLogger(__name__)
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Optional[str]
 
 # ---------------------------------------------------------------------------
-# IP-based rate limiting (fallback / per-IP protection)
-# ---------------------------------------------------------------------------
-
-limiter = Limiter(key_func=get_remote_address)
-
-# ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
 
@@ -79,8 +70,6 @@ app = FastAPI(
     ),
     version="1.0.0",
 )
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 # ---------------------------------------------------------------------------
@@ -88,10 +77,20 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # ---------------------------------------------------------------------------
 
 def _ai_error_response(exc: Exception) -> JSONResponse:
+    """502 — the Anthropic API itself is down or rate-limited."""
     logger.exception("AI service error: %s", exc)
     return JSONResponse(
         status_code=status.HTTP_502_BAD_GATEWAY,
         content={"detail": "AI service unavailable. Please try again later."},
+    )
+
+
+def _internal_error_response(exc: Exception) -> JSONResponse:
+    """500 — a bug in our own code (KeyError, AttributeError, etc.)."""
+    logger.exception("Internal server error: %s", exc)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": "An unexpected error occurred."},
     )
 
 
@@ -105,7 +104,6 @@ def _ai_error_response(exc: Exception) -> JSONResponse:
     status_code=status.HTTP_200_OK,
     summary="Submit a comment for moderation",
 )
-@limiter.limit("60/minute")
 async def moderate(request: Request, body: CommentRequest) -> ModerationResponse:
     """
     Submit a comment for AI moderation.
@@ -128,7 +126,7 @@ async def moderate(request: Request, body: CommentRequest) -> ModerationResponse
     except anthropic.APIError as exc:
         return _ai_error_response(exc)
     except Exception as exc:
-        return _ai_error_response(exc)
+        return _internal_error_response(exc)
 
     comment_id = uuid4()
     now = datetime.now(timezone.utc)
@@ -185,7 +183,6 @@ async def moderate(request: Request, body: CommentRequest) -> ModerationResponse
     status_code=status.HTTP_200_OK,
     summary="Appeal a rejected moderation decision",
 )
-@limiter.limit("20/minute")
 async def appeal(request: Request, body: AppealRequest) -> AppealResponse:
     """
     Submit an appeal for a comment that was previously rejected.
@@ -212,17 +209,19 @@ async def appeal(request: Request, body: AppealRequest) -> AppealResponse:
             ),
         )
 
-    if entry.appealed:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This comment has already been appealed. No further appeals are allowed.",
-        )
-
     # Per-user rate limit on appeals (keyed on user_id from the original entry)
     if not appeal_limiter.is_allowed(entry.user_id):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Appeal rate limit exceeded for user '{entry.user_id}'. Max 5 appeals per 10 minutes.",
+        )
+
+    # Atomic check-and-set: claim the appeal slot under the store lock so
+    # two concurrent requests can't both pass the "already appealed?" check.
+    if not store.try_reserve_appeal(body.comment_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This comment has already been appealed. No further appeals are allowed.",
         )
 
     try:
@@ -235,9 +234,11 @@ async def appeal(request: Request, body: AppealRequest) -> AppealResponse:
             tribe=entry.tribe,
         )
     except anthropic.APIError as exc:
+        store.cancel_appeal_reservation(body.comment_id)
         return _ai_error_response(exc)
     except Exception as exc:
-        return _ai_error_response(exc)
+        store.cancel_appeal_reservation(body.comment_id)
+        return _internal_error_response(exc)
 
     now = datetime.now(timezone.utc)
 

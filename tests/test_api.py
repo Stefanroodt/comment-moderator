@@ -162,6 +162,12 @@ class TestModerateEdgeCases:
             resp = client.post("/moderate", json={"user_id": "u1", "comment": "test"})
         assert resp.status_code == 502
 
+    def test_internal_error_returns_500(self):
+        """A bug in our own code (e.g. KeyError) returns 500, not 502."""
+        with patch("main.moderate_comment", side_effect=KeyError("unexpected_key")):
+            resp = client.post("/moderate", json={"user_id": "u1", "comment": "test"})
+        assert resp.status_code == 500
+
     def test_unparseable_ai_response_fails_to_flagged(self):
         """When Claude returns prose with no valid JSON, the API fails closed to flagged_for_review — not 502."""
         from unittest.mock import AsyncMock, MagicMock
@@ -512,6 +518,18 @@ class TestStats:
         assert data["appeals"]["overturned"] == 1
         assert data["appeals"]["upheld"] == 0
         assert data["appeals"]["overturn_rate"] == 1.0
+
+    def test_effective_decision_in_stats(self):
+        """Stats use effective_decision: a flagged comment that an admin approves counts as approved."""
+        with patch("main.moderate_comment", return_value=FLAGGED_RESULT):
+            resp = client.post("/moderate", json={"user_id": "u1", "comment": "borderline"})
+        comment_id = resp.json()["comment_id"]
+
+        client.patch(f"/log/{comment_id}", json={"decision": "approved", "note": "Verified."})
+
+        data = client.get("/stats").json()
+        assert data["decisions"]["approved"] == 1
+        assert data["decisions"]["flagged_for_review"] == 0
 
     def test_admin_override_count(self):
         """Admin overrides are counted in stats."""

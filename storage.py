@@ -4,6 +4,9 @@ In-memory moderation log.
 Thread-safe via a threading.Lock so the store is safe under FastAPI's
 default multi-threaded Uvicorn workers. No persistence across restarts —
 as per the spec, a database is not required.
+
+NOTE: In-memory state (entries, rate-limiter windows) is NOT shared across
+processes. Horizontal scaling requires an external store such as Redis.
 """
 
 from __future__ import annotations
@@ -30,6 +33,33 @@ class ModerationStore:
         with self._lock:
             self._entries[entry.comment_id] = entry
 
+    def try_reserve_appeal(self, comment_id: UUID) -> bool:
+        """
+        Atomically claim the appeal slot for a comment.
+
+        Sets `appealed = True` under the lock before the AI call so that
+        concurrent requests can't both pass the "already appealed?" check
+        (TOCTOU race). Returns True if the slot was claimed, False if the
+        comment doesn't exist or was already appealed.
+        """
+        with self._lock:
+            entry = self._entries.get(comment_id)
+            if entry is None or entry.appealed:
+                return False
+            self._entries[comment_id] = entry.model_copy(update={"appealed": True})
+            return True
+
+    def cancel_appeal_reservation(self, comment_id: UUID) -> None:
+        """
+        Undo a reservation made by try_reserve_appeal.
+        Called when the AI service fails so the user can try again.
+        Only clears the flag if no appeal result has been recorded yet.
+        """
+        with self._lock:
+            entry = self._entries.get(comment_id)
+            if entry is not None and entry.appealed and entry.appeal_decision is None:
+                self._entries[comment_id] = entry.model_copy(update={"appealed": False})
+
     def record_appeal(
         self,
         comment_id: UUID,
@@ -37,14 +67,13 @@ class ModerationStore:
         appeal_decision: FinalDecision,
         appeal_reasoning: str,
     ) -> Optional[LogEntry]:
-        """Mutate the existing log entry in place with appeal outcome."""
+        """Fill in the appeal outcome. `appealed` is already True (set by try_reserve_appeal)."""
         with self._lock:
             entry = self._entries.get(comment_id)
             if entry is None:
                 return None
             updated = entry.model_copy(
                 update={
-                    "appealed": True,
                     "appeal_context": appeal_context,
                     "appeal_decision": appeal_decision,
                     "appeal_reasoning": appeal_reasoning,
@@ -126,7 +155,9 @@ class ModerationStore:
         admin_overrides = 0
 
         for entry in entries:
-            decisions[entry.decision.value] += 1
+            # Use effective_decision so admin overrides and successful appeals
+            # are reflected in the breakdown, not just the original AI call.
+            decisions[entry.effective_decision.value] += 1
             confidences.append(entry.confidence)
 
             if entry.rejection_category.value != "none":

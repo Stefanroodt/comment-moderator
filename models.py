@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Dict, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +150,23 @@ class LogEntry(BaseModel):
     admin_decision: Optional[ModerationDecision] = None
     admin_note: Optional[str] = None
     admin_timestamp: Optional[datetime] = None
+
+    @computed_field
+    @property
+    def effective_decision(self) -> ModerationDecision:
+        """
+        The current effective decision, accounting for overrides and appeal outcomes.
+
+        Precedence: admin override > appeal outcome > original AI decision.
+        Used in /stats so the breakdown reflects actual content disposition,
+        not just the initial AI call.
+        """
+        if self.admin_overridden and self.admin_decision is not None:
+            return self.admin_decision
+        if self.appealed and self.appeal_decision is not None:
+            # FinalDecision (approved | rejected) maps 1:1 to ModerationDecision values
+            return ModerationDecision(self.appeal_decision.value)
+        return self.decision
 
 
 # ---------------------------------------------------------------------------

@@ -55,7 +55,7 @@ Unit tests don't need a running server or real API key — Claude is mocked:
 pytest tests/ -v
 ```
 
-48 tests, runs in about a second.
+50 tests, runs in about a second.
 
 ---
 
@@ -175,7 +175,7 @@ comment-moderator/
 
 **Three outcomes instead of two** — I went with `approved`, `rejected`, and `flagged_for_review` rather than just approve/reject. The flagged state routes borderline content to a human rather than making a confident wrong call. The admin override endpoint closes that loop.
 
-**Rate limiting on `user_id` not IP** — IP limits break in office environments where everyone shares one address. `user_id` is more accurate. There's a secondary IP ceiling via `slowapi` as a backstop.
+**Rate limiting on `user_id` not IP** — IP limits break in office environments where everyone shares one address. `user_id` is more accurate. The rate limiter is a custom sliding window keyed on `user_id`; there's no per-IP layer because it would contradict this and add noise.
 
 **The appeal prompt** — I had to explicitly tell Claude not to just repeat the original decision. Without that instruction it was basically rubber-stamping rejections. The prompt now asks it to consider whether the context genuinely changes anything.
 
@@ -196,3 +196,4 @@ comment-moderator/
 - **Background webhook delivery** — currently it fires inline which adds a small amount of latency. Easy fix with FastAPI's `BackgroundTasks`
 - **Appeal expiry** — probably shouldn't allow appeals on 6-month-old rejections
 - **Confidence tracking over time** — comparing AI decisions vs human overrides would give useful signal for prompt tuning
+- **Redis for horizontal scaling** — the in-memory store and rate-limiter windows aren't shared across processes, so running multiple workers requires an external store

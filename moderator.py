@@ -166,7 +166,7 @@ TRIBE_GUIDANCE: Dict[str, str] = {
         "advertising services IS the point here — approve unless the content is fraudulent, "
         "abusive, or completely unrelated to property."
     ),
-    "Property Seminars & Events": (
+    "Property Seminars": (
         "This tribe is for promoting property-related seminars, training events, and "
         "networking. Event listings and course promotions are expected and should be "
         "approved. Flag content using high-pressure tactics or claiming guaranteed returns."
@@ -176,25 +176,19 @@ TRIBE_GUIDANCE: Dict[str, str] = {
         "Commercial promotion is acceptable. Reject only if the product is unrelated to "
         "property or the listing is clearly fraudulent."
     ),
-    "No Money Down (NMD)": (
-        "HIGHER SCRUTINY REQUIRED. This tribe discusses 'no money down' and creative finance "
-        "strategies. These can be legitimate but the topic attracts scams and misleading "
-        "claims. Be especially suspicious of guaranteed returns, off-platform contact "
-        "requests, or unverifiable claims. Prefer flagging over approving when uncertain."
-    ),
     "Problem Tenants": (
         "Landlords venting about difficult tenants often use strong, frustrated language — "
         "this is normal and acceptable in this tribe. Approve content that discusses genuine "
         "landlord difficulties even if the tone is harsh. Only reject if it targets named "
         "individuals with harassment or contains hate speech."
     ),
-    "HMO Landlords": (
+    "HMOs": (
         "Technical discussion tribe for HMO (House in Multiple Occupation) landlords. "
         "Discussing Article 4 directions, mandatory licensing, room sizes, fire safety, "
         "and tenant management is all on-topic. Self-promotion is NOT appropriate here — "
         "reject undisclosed advertising."
     ),
-    "Rent to Rent": (
+    "Rent-to-Rent": (
         "Legitimate strategy discussion but this tribe attracts 'guru' content selling "
         "systems and courses. Flag content that promotes paid programmes without clear "
         "transparency about cost and affiliation. Strategy discussion itself is fine."
@@ -218,6 +212,28 @@ TRIBE_GUIDANCE: Dict[str, str] = {
 }
 
 
+def _normalize(name: str) -> str:
+    """Lowercase and collapse non-alphanumeric characters for fuzzy tribe matching."""
+    return re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
+
+
+def _get_tribe_guidance(tribe: str) -> Optional[str]:
+    """
+    Return tribe-specific guidance with case/punctuation-insensitive fallback.
+
+    Exact match is tried first. If that misses, a normalized comparison handles
+    variants like 'hmos' == 'HMOs' or 'Rent to Rent' == 'Rent-to-Rent'.
+    """
+    exact = TRIBE_GUIDANCE.get(tribe)
+    if exact:
+        return exact
+    norm = _normalize(tribe)
+    return next(
+        (v for k, v in TRIBE_GUIDANCE.items() if _normalize(k) == norm),
+        None,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public async API
 # ---------------------------------------------------------------------------
@@ -229,22 +245,19 @@ async def moderate_comment(comment: str, tribe: Optional[str] = None) -> Dict[st
     Returns a dict with keys:
         decision, confidence, reasoning, rejection_category
     """
-    # Build tribe-specific context block if a tribe was provided
+    # Forum context and tribe rules go in the system prompt (trusted instructions).
+    # The comment goes in the user turn (untrusted content). Keeping them separate
+    # is standard practice for adversarial inputs and reinforces the injection hardening.
     if tribe:
-        tribe_note = TRIBE_GUIDANCE.get(tribe)
+        tribe_note = _get_tribe_guidance(tribe)
         if tribe_note:
-            tribe_section = f"\nTRIBE-SPECIFIC RULES for '{tribe}':\n{tribe_note}"
+            system_content = f"{FORUM_CONTEXT}\n\nTRIBE-SPECIFIC RULES for '{tribe}':\n{tribe_note}"
         else:
-            tribe_section = f"\nThis comment was posted in the '{tribe}' tribe. Apply standard PropertyTribes moderation guidelines for this topic area."
+            system_content = f"{FORUM_CONTEXT}\n\nThis comment was posted in the '{tribe}' tribe. Apply standard PropertyTribes moderation guidelines for this topic area."
     else:
-        tribe_section = ""
+        system_content = FORUM_CONTEXT
 
     prompt = f"""
-{FORUM_CONTEXT}
-{tribe_section}
-
----
-
 A user has submitted the following comment to the PropertyTribes forum.
 Evaluate it and respond with ONLY a JSON object — no preamble, no explanation outside
 the JSON.
@@ -289,6 +302,8 @@ Notes:
     message = await _get_client().messages.create(
         model=MODEL,
         max_tokens=512,
+        temperature=0,
+        system=system_content,
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -340,22 +355,17 @@ async def moderate_appeal(
     the prompt so Claude can directly address the specific objection rather than
     re-evaluating blind. Returns a dict with: appeal_decision, reasoning.
     """
-    # Reuse the same tribe context the original decision was made under
+    # Reuse the same system context as the original decision for consistency
     if tribe:
-        tribe_note = TRIBE_GUIDANCE.get(tribe)
+        tribe_note = _get_tribe_guidance(tribe)
         if tribe_note:
-            tribe_section = f"\nTRIBE-SPECIFIC RULES for '{tribe}' (same rules applied in original decision):\n{tribe_note}"
+            system_content = f"{FORUM_CONTEXT}\n\nTRIBE-SPECIFIC RULES for '{tribe}' (same rules applied in original decision):\n{tribe_note}"
         else:
-            tribe_section = f"\nThis comment was posted in the '{tribe}' tribe."
+            system_content = f"{FORUM_CONTEXT}\n\nThis comment was posted in the '{tribe}' tribe."
     else:
-        tribe_section = ""
+        system_content = FORUM_CONTEXT
 
     prompt = f"""
-{FORUM_CONTEXT}
-{tribe_section}
-
----
-
 A user is appealing a moderation decision on PropertyTribes. Your job is to conduct a
 GENUINE re-evaluation. Do not simply repeat the original rejection.
 
@@ -390,6 +400,8 @@ This is a FINAL decision — there are no further appeals. Respond with ONLY a J
     message = await _get_client().messages.create(
         model=MODEL,
         max_tokens=512,
+        temperature=0,
+        system=system_content,
         messages=[{"role": "user", "content": prompt}],
     )
 

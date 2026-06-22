@@ -23,7 +23,7 @@ from uuid import uuid4
 load_dotenv()
 
 import anthropic
-from fastapi import FastAPI, HTTPException, Query, Request, status
+from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 
 from models import (
@@ -269,21 +269,25 @@ async def appeal(request: Request, body: AppealRequest) -> AppealResponse:
     summary="Retrieve the full moderation log",
 )
 async def get_log(
+    response: Response,
     page: int = Query(1, ge=1, description="Page number (1-indexed)."),
-    limit: int = Query(20, ge=1, le=100, description="Results per page (max 100)."),
+    limit: int = Query(100, ge=1, le=1000, description="Results per page (max 1000). Defaults to 100 to avoid silent truncation."),
 ) -> List[LogEntry]:
     """
     Returns moderation decisions in reverse-chronological order.
 
-    Supports pagination via `page` and `limit` query parameters.
-    Example: GET /log?page=2&limit=10
-    """
-    entries = store.all()
-    entries.sort(key=lambda e: e.timestamp, reverse=True)
+    Default limit is 100 to avoid silently hiding entries. The `X-Total-Count`
+    response header always reports the full dataset size regardless of paging.
 
+    Example: GET /log?page=2&limit=50
+    """
+    all_entries = store.all()
+    all_entries.sort(key=lambda e: e.timestamp, reverse=True)
+
+    response.headers["X-Total-Count"] = str(len(all_entries))
     start = (page - 1) * limit
     end = start + limit
-    return entries[start:end]
+    return all_entries[start:end]
 
 
 # ---------------------------------------------------------------------------

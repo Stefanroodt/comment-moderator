@@ -141,9 +141,11 @@ class TestModerateEdgeCases:
         resp = client.post("/moderate", json={"user_id": "u1", "comment": "   "})
         assert resp.status_code == 422
 
-    def test_missing_user_id(self):
-        resp = client.post("/moderate", json={"comment": "Hello"})
-        assert resp.status_code == 422
+    def test_missing_user_id_defaults_to_anonymous(self):
+        """user_id is optional — omitting it uses 'anonymous' rather than returning 422."""
+        with patch("main.moderate_comment", return_value=APPROVED_RESULT):
+            resp = client.post("/moderate", json={"comment": "Hello"})
+        assert resp.status_code == 200
 
     def test_comment_at_max_length(self):
         long_comment = "A" * 5000
@@ -364,9 +366,19 @@ class TestLog:
         assert resp.status_code == 422
 
     def test_limit_too_large_returns_422(self):
-        """limit above 100 is rejected."""
-        resp = client.get("/log?limit=101")
+        """limit above 1000 is rejected."""
+        resp = client.get("/log?limit=1001")
         assert resp.status_code == 422
+
+    def test_log_returns_total_count_header(self):
+        """X-Total-Count header always reflects the full dataset size, not just the current page."""
+        with patch("main.moderate_comment", return_value=APPROVED_RESULT):
+            for i in range(3):
+                client.post("/moderate", json={"user_id": f"u{i}", "comment": f"Comment {i}"})
+        resp = client.get("/log?limit=2")
+        assert resp.status_code == 200
+        assert len(resp.json()) == 2
+        assert resp.headers["x-total-count"] == "3"
 
 
 # ---------------------------------------------------------------------------
@@ -692,13 +704,28 @@ class TestTribeAwareness:
         assert resp.status_code == 422
 
     def test_tribe_specific_prompt_content(self):
-        """TRIBE_GUIDANCE contains entries for key PropertyTribes tribes."""
+        """TRIBE_GUIDANCE uses real PropertyTribes tribe names."""
         from moderator import TRIBE_GUIDANCE
         assert "Wanted & Recommendations" in TRIBE_GUIDANCE
-        assert "No Money Down (NMD)" in TRIBE_GUIDANCE
         assert "Problem Tenants" in TRIBE_GUIDANCE
-        assert "HMO Landlords" in TRIBE_GUIDANCE
-        # NMD tribe should flag higher scrutiny
-        assert "HIGHER SCRUTINY" in TRIBE_GUIDANCE["No Money Down (NMD)"]
+        assert "HMOs" in TRIBE_GUIDANCE            # real name (not "HMO Landlords")
+        assert "Rent-to-Rent" in TRIBE_GUIDANCE    # real name (not "Rent to Rent")
+        assert "Property Seminars" in TRIBE_GUIDANCE  # real name (not "Property Seminars & Events")
         # Wanted & Recommendations should allow self-promotion
         assert "approve" in TRIBE_GUIDANCE["Wanted & Recommendations"].lower()
+
+    def test_tribe_normalized_lookup(self):
+        """Tribe lookup is case/punctuation-insensitive so minor caller variants don't silently miss."""
+        from moderator import _get_tribe_guidance
+        assert _get_tribe_guidance("HMOs") is not None           # exact
+        assert _get_tribe_guidance("hmos") is not None           # lowercase
+        assert _get_tribe_guidance("Rent to Rent") is not None   # hyphen dropped → matches "Rent-to-Rent"
+        assert _get_tribe_guidance("totally unknown xyz") is None # genuinely unknown → None
+
+    def test_user_id_defaults_to_anonymous(self):
+        """user_id is optional; omitting it defaults to 'anonymous' for rate-limit keying."""
+        with patch("main.moderate_comment", return_value=APPROVED_RESULT):
+            resp = client.post("/moderate", json={"comment": "Good property question."})
+        assert resp.status_code == 200
+        log = client.get("/log").json()
+        assert log[0]["user_id"] == "anonymous"

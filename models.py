@@ -45,10 +45,10 @@ class RejectionCategory(str, Enum):
 
 class CommentRequest(BaseModel):
     user_id: str = Field(
-        ...,
+        default="anonymous",
         min_length=1,
         max_length=64,
-        description="Identifier for the submitting user (used for rate limiting).",
+        description="Identifier for the submitting user (used for rate limiting). Defaults to 'anonymous'.",
         examples=["user_abc123"],
     )
     comment: str = Field(

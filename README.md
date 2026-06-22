@@ -68,7 +68,8 @@ curl -X POST http://localhost:8000/moderate \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user_abc123",
-    "comment": "Has anyone dealt with Article 4 directions for HMOs in Manchester?"
+    "comment": "Has anyone dealt with Article 4 directions for HMOs in Manchester?",
+    "tribe": "HMO Landlords"
   }'
 ```
 
@@ -82,6 +83,8 @@ curl -X POST http://localhost:8000/moderate \
   "timestamp": "2024-11-15T10:30:00Z"
 }
 ```
+
+The `tribe` field is optional. When provided, the moderator applies tribe-specific rules — for example, self-promotion is fine in `Wanted & Recommendations` but rejected in `HMO Landlords`, and `No Money Down (NMD)` gets higher scrutiny by default.
 
 Decisions: `approved`, `rejected`, `flagged_for_review`
 
@@ -146,12 +149,16 @@ curl -X PATCH http://localhost:8000/log/3fa85f64-5717-4562-b3fc-2c963f66afa6 \
 
 ```
 comment-moderator/
-├── main.py          # routes
-├── moderator.py     # Claude prompt + API calls
-├── models.py        # Pydantic models
-├── storage.py       # in-memory store (thread-safe)
-├── rate_limiter.py  # sliding window per user_id
-├── webhook.py       # fires on flagged content
+├── main.py                   # routes
+├── moderator.py              # Claude prompt + API calls
+├── models.py                 # Pydantic models
+├── storage.py                # in-memory store (thread-safe)
+├── rate_limiter.py           # sliding window per user_id
+├── webhook.py                # fires on flagged content
+├── demo.sh                   # end-to-end demo script (requires jq)
+├── postman_collection.json   # all endpoints pre-wired, comment_id auto-saved
+├── Dockerfile
+├── docker-compose.yml
 └── tests/
     └── test_api.py
 ```
@@ -163,6 +170,8 @@ comment-moderator/
 **Why async Claude calls?** FastAPI is async but if you call the Claude API with the regular blocking client it ties up the event loop for the 1-2 seconds each call takes. Used `AsyncAnthropic` to avoid that.
 
 **Prompt design** — the system prompt includes the actual PropertyTribes context: the 40+ tribes, what topics are on-topic, what kinds of comments the community flags as problematic. A generic moderation prompt would misfire constantly on things like "Problem Tenants" discussions which look aggressive out of context but are completely normal on this forum.
+
+**Tribe-aware moderation** — when a `tribe` is supplied, the prompt gets a tribe-specific rules block on top of the general context. Ten tribes have explicit guidance baked in: `No Money Down (NMD)` gets higher scrutiny by default, `Problem Tenants` expects harsh language and approves it, `Wanted & Recommendations` treats self-promotion as the whole point, `Scottish PRS` is reminded it runs under different legislation, and so on. Unknown tribes fall back to the general PropertyTribes guidelines.
 
 **Three outcomes instead of two** — I went with `approved`, `rejected`, and `flagged_for_review` rather than just approve/reject. The flagged state routes borderline content to a human rather than making a confident wrong call. The admin override endpoint closes that loop.
 

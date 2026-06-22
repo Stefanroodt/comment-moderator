@@ -14,7 +14,7 @@ from typing import Dict, List, Optional
 
 from uuid import UUID
 
-from models import AdminOverrideRequest, FinalDecision, LogEntry, ModerationDecision
+from models import FinalDecision, LogEntry, ModerationDecision
 
 
 class ModerationStore:

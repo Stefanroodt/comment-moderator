@@ -1,10 +1,13 @@
 """
 AI Comment Moderator API
 ========================
-Three endpoints:
-  POST /moderate  — submit a comment for AI moderation
-  POST /appeal    — appeal a rejected decision
-  GET  /log       — retrieve the full moderation log
+Endpoints:
+  POST  /moderate         — submit a comment for AI moderation
+  POST  /appeal           — appeal a rejected decision
+  GET   /log              — retrieve the full moderation log
+  GET   /stats            — aggregate moderation statistics
+  PATCH /log/{comment_id} — admin: override a decision
+  GET   /health           — health check
 
 Run with:
   uvicorn main:app --reload

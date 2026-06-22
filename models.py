@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Dict, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -137,6 +137,42 @@ class LogEntry(BaseModel):
     admin_decision: Optional[ModerationDecision] = None
     admin_note: Optional[str] = None
     admin_timestamp: Optional[datetime] = None
+
+
+# ---------------------------------------------------------------------------
+# Stats response
+# ---------------------------------------------------------------------------
+
+class DecisionBreakdown(BaseModel):
+    approved: int
+    rejected: int
+    flagged_for_review: int
+
+
+class DecisionPercentages(BaseModel):
+    approved: float = Field(..., description="Percentage of comments approved (0–100).")
+    rejected: float = Field(..., description="Percentage of comments rejected (0–100).")
+    flagged_for_review: float = Field(..., description="Percentage flagged for human review (0–100).")
+
+
+class AppealStats(BaseModel):
+    total: int = Field(..., description="Total number of appeals submitted.")
+    overturned: int = Field(..., description="Appeals where the original rejection was reversed.")
+    upheld: int = Field(..., description="Appeals where the original rejection was confirmed.")
+    overturn_rate: float = Field(..., description="Fraction of appeals that overturned the original decision (0–1).")
+
+
+class ModerationStats(BaseModel):
+    total_comments: int = Field(..., description="Total comments submitted for moderation.")
+    decisions: DecisionBreakdown
+    decision_percentages: DecisionPercentages
+    avg_confidence: float = Field(..., description="Average AI confidence score across all decisions (0–1).")
+    top_rejection_categories: Dict[str, int] = Field(
+        ...,
+        description="Rejection category counts, sorted by frequency descending. Excludes 'none'.",
+    )
+    appeals: AppealStats
+    admin_overrides: int = Field(..., description="Number of decisions manually overridden by an admin.")
 
 
 # ---------------------------------------------------------------------------

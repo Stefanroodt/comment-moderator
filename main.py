@@ -35,6 +35,7 @@ from models import (
     LogEntry,
     ModerationDecision,
     ModerationResponse,
+    ModerationStats,
 )
 from moderator import moderate_comment, moderate_appeal
 from rate_limiter import moderate_limiter, appeal_limiter
@@ -323,6 +324,29 @@ async def admin_override(comment_id: str, body: AdminOverrideRequest) -> Dict[st
     )
 
     return updated.model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
+# Stats
+# ---------------------------------------------------------------------------
+
+@app.get(
+    "/stats",
+    response_model=ModerationStats,
+    status_code=status.HTTP_200_OK,
+    summary="Moderation statistics",
+)
+async def get_stats() -> ModerationStats:
+    """
+    Returns aggregate statistics across all moderation decisions:
+
+    - **Decision breakdown** — counts and percentages for approved / rejected / flagged
+    - **Average confidence** — mean AI confidence score across all decisions
+    - **Top rejection categories** — ranked by frequency (spam, promotional, etc.)
+    - **Appeal stats** — total appeals, overturn rate, upheld rate
+    - **Admin overrides** — number of human moderator interventions
+    """
+    return ModerationStats(**store.stats())
 
 
 # ---------------------------------------------------------------------------

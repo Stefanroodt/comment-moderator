@@ -92,6 +92,65 @@ class ModerationStore:
         with self._lock:
             return len(self._entries)
 
+    def stats(self) -> dict:
+        """Compute aggregate moderation statistics over all stored entries."""
+        with self._lock:
+            entries = list(self._entries.values())
+
+        total = len(entries)
+        empty_stats: dict = {
+            "total_comments": 0,
+            "decisions": {"approved": 0, "rejected": 0, "flagged_for_review": 0},
+            "decision_percentages": {"approved": 0.0, "rejected": 0.0, "flagged_for_review": 0.0},
+            "avg_confidence": 0.0,
+            "top_rejection_categories": {},
+            "appeals": {"total": 0, "overturned": 0, "upheld": 0, "overturn_rate": 0.0},
+            "admin_overrides": 0,
+        }
+        if total == 0:
+            return empty_stats
+
+        decisions: dict = {"approved": 0, "rejected": 0, "flagged_for_review": 0}
+        categories: dict = {}
+        confidences: list = []
+        appeals_total = 0
+        appeals_overturned = 0
+        admin_overrides = 0
+
+        for entry in entries:
+            decisions[entry.decision.value] += 1
+            confidences.append(entry.confidence)
+
+            if entry.rejection_category.value != "none":
+                cat = entry.rejection_category.value
+                categories[cat] = categories.get(cat, 0) + 1
+
+            if entry.appealed:
+                appeals_total += 1
+                if entry.appeal_decision and entry.appeal_decision.value == "approved":
+                    appeals_overturned += 1
+
+            if entry.admin_overridden:
+                admin_overrides += 1
+
+        overturn_rate = round(appeals_overturned / appeals_total, 3) if appeals_total > 0 else 0.0
+        sorted_categories = dict(sorted(categories.items(), key=lambda x: x[1], reverse=True))
+
+        return {
+            "total_comments": total,
+            "decisions": decisions,
+            "decision_percentages": {k: round(v / total * 100, 1) for k, v in decisions.items()},
+            "avg_confidence": round(sum(confidences) / len(confidences), 3),
+            "top_rejection_categories": sorted_categories,
+            "appeals": {
+                "total": appeals_total,
+                "overturned": appeals_overturned,
+                "upheld": appeals_total - appeals_overturned,
+                "overturn_rate": overturn_rate,
+            },
+            "admin_overrides": admin_overrides,
+        }
+
 
 # Singleton — imported and used directly by main.py and routes.
 store = ModerationStore()

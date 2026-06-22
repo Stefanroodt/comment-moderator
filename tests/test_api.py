@@ -376,3 +376,115 @@ class TestWebhook:
              patch("main.send_flagged_webhook", side_effect=Exception("network error")):
             resp = client.post("/moderate", json={"user_id": "u1", "comment": "borderline"})
             assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# GET /stats
+# ---------------------------------------------------------------------------
+
+class TestStats:
+
+    def test_empty_stats(self):
+        """Stats on an empty store returns all zeros."""
+        resp = client.get("/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_comments"] == 0
+        assert data["decisions"] == {"approved": 0, "rejected": 0, "flagged_for_review": 0}
+        assert data["avg_confidence"] == 0.0
+        assert data["top_rejection_categories"] == {}
+        assert data["appeals"]["total"] == 0
+        assert data["appeals"]["overturn_rate"] == 0.0
+        assert data["admin_overrides"] == 0
+
+    def test_decision_counts(self):
+        """Decision breakdown reflects what was moderated."""
+        with patch("main.moderate_comment", return_value=APPROVED_RESULT):
+            client.post("/moderate", json={"user_id": "u1", "comment": "good question"})
+            client.post("/moderate", json={"user_id": "u2", "comment": "another good one"})
+        with patch("main.moderate_comment", return_value=REJECTED_RESULT):
+            client.post("/moderate", json={"user_id": "u3", "comment": "spam comment"})
+
+        resp = client.get("/stats")
+        data = resp.json()
+        assert data["total_comments"] == 3
+        assert data["decisions"]["approved"] == 2
+        assert data["decisions"]["rejected"] == 1
+        assert data["decisions"]["flagged_for_review"] == 0
+
+    def test_decision_percentages(self):
+        """Percentages sum to 100 and reflect correct proportions."""
+        with patch("main.moderate_comment", return_value=APPROVED_RESULT):
+            client.post("/moderate", json={"user_id": "u1", "comment": "post one"})
+        with patch("main.moderate_comment", return_value=REJECTED_RESULT):
+            client.post("/moderate", json={"user_id": "u2", "comment": "spam post"})
+            client.post("/moderate", json={"user_id": "u3", "comment": "more spam"})
+
+        data = client.get("/stats").json()
+        pcts = data["decision_percentages"]
+        assert abs(pcts["approved"] - 33.3) < 0.2
+        assert abs(pcts["rejected"] - 66.7) < 0.2
+        total_pct = pcts["approved"] + pcts["rejected"] + pcts["flagged_for_review"]
+        assert abs(total_pct - 100.0) < 0.5
+
+    def test_avg_confidence(self):
+        """Average confidence is the mean of all entries."""
+        result_95 = {**APPROVED_RESULT, "confidence": 0.95}
+        result_85 = {**REJECTED_RESULT, "confidence": 0.85}
+        with patch("main.moderate_comment", return_value=result_95):
+            client.post("/moderate", json={"user_id": "u1", "comment": "good"})
+        with patch("main.moderate_comment", return_value=result_85):
+            client.post("/moderate", json={"user_id": "u2", "comment": "spam"})
+
+        data = client.get("/stats").json()
+        assert abs(data["avg_confidence"] - 0.9) < 0.01
+
+    def test_top_rejection_categories(self):
+        """Rejection categories are ranked by frequency, excluding 'none'."""
+        spam_result = {**REJECTED_RESULT, "rejection_category": RejectionCategory.SPAM}
+        promo_result = {**REJECTED_RESULT, "rejection_category": RejectionCategory.PROMOTIONAL}
+
+        with patch("main.moderate_comment", return_value=spam_result):
+            client.post("/moderate", json={"user_id": "u1", "comment": "spam 1"})
+            client.post("/moderate", json={"user_id": "u2", "comment": "spam 2"})
+        with patch("main.moderate_comment", return_value=promo_result):
+            client.post("/moderate", json={"user_id": "u3", "comment": "promo"})
+        with patch("main.moderate_comment", return_value=APPROVED_RESULT):
+            client.post("/moderate", json={"user_id": "u4", "comment": "good"})
+
+        data = client.get("/stats").json()
+        cats = data["top_rejection_categories"]
+        assert cats["spam"] == 2
+        assert cats["promotional"] == 1
+        assert "none" not in cats
+        # spam should come first (highest count)
+        assert list(cats.keys())[0] == "spam"
+
+    def test_appeal_overturn_rate(self):
+        """Appeal stats reflect overturned and upheld counts correctly."""
+        with patch("main.moderate_comment", return_value=REJECTED_RESULT):
+            resp = client.post("/moderate", json={"user_id": "u1", "comment": "rejected"})
+        comment_id = resp.json()["comment_id"]
+
+        with patch("main.moderate_appeal", return_value=APPEAL_APPROVED):
+            client.post("/appeal", json={
+                "comment_id": comment_id,
+                "appeal_context": "I am a professional with 10 years experience.",
+            })
+
+        data = client.get("/stats").json()
+        assert data["appeals"]["total"] == 1
+        assert data["appeals"]["overturned"] == 1
+        assert data["appeals"]["upheld"] == 0
+        assert data["appeals"]["overturn_rate"] == 1.0
+
+    def test_admin_override_count(self):
+        """Admin overrides are counted in stats."""
+        with patch("main.moderate_comment", return_value=FLAGGED_RESULT):
+            resp = client.post("/moderate", json={"user_id": "u1", "comment": "borderline"})
+        comment_id = resp.json()["comment_id"]
+
+        client.patch(f"/log/{comment_id}", json={"decision": "approved", "note": "Verified."})
+
+        data = client.get("/stats").json()
+        assert data["admin_overrides"] == 1

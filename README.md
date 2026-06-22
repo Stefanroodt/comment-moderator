@@ -114,7 +114,7 @@ The AI re-evaluates the original comment alongside the appeal context. Final dec
 curl "http://localhost:8000/log?page=1&limit=20"
 ```
 
-Returns everything in reverse chronological order. Includes appeal and admin override details if applicable.
+Returns all moderation decisions, newest first. If a comment was appealed or overridden by an admin, that's in there too.
 
 ---
 
@@ -166,7 +166,7 @@ comment-moderator/
 
 **Three outcomes instead of two** — I went with `approved`, `rejected`, and `flagged_for_review` rather than just approve/reject. The flagged state routes borderline content to a human rather than making a confident wrong call. The admin override endpoint closes that loop.
 
-**Rate limiting on `user_id` not IP** — IP-based limits break in shared network environments. Keying on `user_id` is more accurate. There's still a secondary IP-based ceiling via `slowapi` as a fallback.
+**Rate limiting on `user_id` not IP** — IP limits break in office environments where everyone shares one address. `user_id` is more accurate. There's a secondary IP ceiling via `slowapi` as a backstop.
 
 **The appeal prompt** — I had to explicitly tell Claude not to just repeat the original decision. Without that instruction it was basically rubber-stamping rejections. The prompt now asks it to consider whether the context genuinely changes anything.
 

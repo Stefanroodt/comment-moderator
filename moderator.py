@@ -242,18 +242,30 @@ Comment to evaluate:
 {comment}
 </comment>
 
+Before deciding, ask yourself:
+- What would make me change this decision? If almost nothing could, confidence is high.
+- Is there missing context that would materially affect the outcome?
+- Would a different moderator reasonably reach a different conclusion?
+
+Confidence calibration — use the full range, not just high values:
+- 0.95–1.0: No ambiguity. Clear spam, clear legitimate question. You'd stake your reputation on it.
+- 0.80–0.94: Fairly clear but minor contextual uncertainty remains.
+- 0.65–0.79: Leaning one way but a reasonable person could disagree.
+- 0.50–0.64: Genuinely uncertain — this is what flagged_for_review is for.
+- Below 0.50: Should not occur — if you're this uncertain, flag it.
+
 Respond with exactly this JSON structure:
 {{
   "decision": "<approved | rejected | flagged_for_review>",
   "confidence": <float between 0.0 and 1.0>,
-  "reasoning": "<1-3 sentence explanation visible to moderators>",
+  "reasoning": "<1-3 sentences — state what the comment is doing and why that leads to this decision>",
   "rejection_category": "<spam | hate_speech | misinformation | off_topic | abusive | promotional | none>"
 }}
 
 Notes:
 - rejection_category must be "none" if decision is "approved" or "flagged_for_review"
-- confidence should reflect how clear-cut the decision is (1.0 = certain, 0.5 = borderline)
-- reasoning should be concise but specific enough to justify a moderation action
+- Do not default to 0.95 — assign confidence that genuinely reflects your certainty
+- reasoning should name the specific issue, not just restate the decision
 """.strip()
 
     logger.info("Sending comment to Claude for moderation (length=%d, tribe=%s)", len(comment), tribe or "none")

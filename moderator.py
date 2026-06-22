@@ -4,6 +4,9 @@ AI moderation logic.
 All prompt construction and Claude API calls live here. Keeping this
 separate from the route layer means the prompts can be iterated without
 touching HTTP concerns, and each function is independently testable.
+
+Uses AsyncAnthropic so Claude API calls are non-blocking — the FastAPI
+event loop stays free to handle other requests while waiting for the AI.
 """
 
 from __future__ import annotations
@@ -20,18 +23,18 @@ from models import FinalDecision, ModerationDecision, RejectionCategory
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Shared Claude client (reads ANTHROPIC_API_KEY from environment)
+# Shared async Claude client (reads ANTHROPIC_API_KEY from environment)
 # Lazy-initialised so tests can import this module without a live API key.
 # ---------------------------------------------------------------------------
 
-_client: anthropic.Anthropic | None = None
-MODEL = "claude-haiku-4-5-20251001"  # Fast + cheap; swap to Sonnet/Opus for higher stakes
+_client: anthropic.AsyncAnthropic | None = None
+MODEL = "claude-haiku-4-5-20251001"
 
 
-def _get_client() -> anthropic.Anthropic:
+def _get_client() -> anthropic.AsyncAnthropic:
     global _client
     if _client is None:
-        _client = anthropic.Anthropic()
+        _client = anthropic.AsyncAnthropic()
     return _client
 
 
@@ -78,12 +81,10 @@ def _extract_json(text: str) -> Dict[str, Any]:
     Extract a JSON object from Claude's response text.
     Claude may wrap JSON in markdown code fences — this handles both cases.
     """
-    # Try to find a JSON block (with or without ```json fences)
     json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if json_match:
         raw = json_match.group(1)
     else:
-        # Fallback: find the first {...} block in the raw text
         brace_match = re.search(r"\{.*\}", text, re.DOTALL)
         if not brace_match:
             raise ValueError(f"No JSON object found in AI response: {text!r}")
@@ -115,12 +116,12 @@ def _clamp_confidence(value: Any) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public async API
 # ---------------------------------------------------------------------------
 
-def moderate_comment(comment: str) -> Dict[str, Any]:
+async def moderate_comment(comment: str) -> Dict[str, Any]:
     """
-    Send a comment to Claude for moderation.
+    Async: send a comment to Claude for moderation.
 
     Returns a dict with keys:
         decision, confidence, reasoning, rejection_category
@@ -155,7 +156,7 @@ Notes:
 
     logger.info("Sending comment to Claude for moderation (length=%d)", len(comment))
 
-    message = _get_client().messages.create(
+    message = await _get_client().messages.create(
         model=MODEL,
         max_tokens=512,
         messages=[{"role": "user", "content": prompt}],
@@ -174,9 +175,9 @@ Notes:
     }
 
 
-def moderate_appeal(original_comment: str, appeal_context: str) -> Dict[str, Any]:
+async def moderate_appeal(original_comment: str, appeal_context: str) -> Dict[str, Any]:
     """
-    Re-evaluate a rejected comment in light of the user's appeal context.
+    Async: re-evaluate a rejected comment in light of the user's appeal context.
 
     The prompt explicitly instructs Claude to genuinely reconsider — not just
     rubber-stamp the original decision. Returns a dict with:
@@ -215,7 +216,7 @@ This is a FINAL decision — there are no further appeals. Respond with ONLY a J
 
     logger.info("Sending appeal to Claude for re-evaluation")
 
-    message = _get_client().messages.create(
+    message = await _get_client().messages.create(
         model=MODEL,
         max_tokens=512,
         messages=[{"role": "user", "content": prompt}],

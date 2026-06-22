@@ -11,9 +11,10 @@ from __future__ import annotations
 import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+
 from uuid import UUID
 
-from models import FinalDecision, LogEntry, ModerationDecision
+from models import AdminOverrideRequest, FinalDecision, LogEntry, ModerationDecision
 
 
 class ModerationStore:
@@ -48,6 +49,28 @@ class ModerationStore:
                     "appeal_decision": appeal_decision,
                     "appeal_reasoning": appeal_reasoning,
                     "appeal_timestamp": datetime.now(timezone.utc),
+                }
+            )
+            self._entries[comment_id] = updated
+            return updated
+
+    def record_admin_override(
+        self,
+        comment_id: UUID,
+        decision: ModerationDecision,
+        note: Optional[str],
+    ) -> Optional[LogEntry]:
+        """Apply a human moderator override to an existing log entry."""
+        with self._lock:
+            entry = self._entries.get(comment_id)
+            if entry is None:
+                return None
+            updated = entry.model_copy(
+                update={
+                    "admin_overridden": True,
+                    "admin_decision": decision,
+                    "admin_note": note,
+                    "admin_timestamp": datetime.now(timezone.utc),
                 }
             )
             self._entries[comment_id] = updated

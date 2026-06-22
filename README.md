@@ -1,21 +1,21 @@
 # AI Comment Moderator
 
-Automatic comment moderation for [PropertyTribes](https://www.propertytribes.com/) using the Anthropic Claude API. Supports an appeal flow for rejected comments.
+Automatic comment moderation for [PropertyTribes](https://www.propertytribes.com/) using the Anthropic Claude API. Supports an appeal flow for rejected comments, per-user rate limiting, webhook notifications for flagged content, and a human admin override endpoint.
 
 ---
 
 ## Setup (< 5 minutes)
 
 ### Prerequisites
-- Python 3.11+
+- Python 3.9+
 - An [Anthropic API key](https://console.anthropic.com/)
 
 ### 1. Clone and install
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/Stefanroodt/comment-moderator.git
 cd comment-moderator
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
@@ -25,6 +25,7 @@ pip install -r requirements.txt
 ```bash
 cp .env.example .env
 # Edit .env and add your ANTHROPIC_API_KEY
+# Optionally add WEBHOOK_URL for flagged content notifications
 ```
 
 ### 3. Run
@@ -74,6 +75,10 @@ curl -X POST http://localhost:8000/moderate \
 
 Possible decisions: `approved` · `rejected` · `flagged_for_review`
 
+Rejection categories: `spam` · `hate_speech` · `misinformation` · `off_topic` · `abusive` · `promotional`
+
+Rate limited to **30 requests per user per minute**.
+
 ---
 
 ### `POST /appeal`
@@ -85,7 +90,7 @@ curl -X POST http://localhost:8000/appeal \
   -H "Content-Type: application/json" \
   -d '{
     "comment_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-    "appeal_context": "I am a RICS-qualified surveyor. My comment was professional advice drawn from 15 years of practice, not spam."
+    "appeal_context": "I am a RICS-qualified surveyor with 15 years of experience. My comment was professional advice, not spam."
   }'
 ```
 
@@ -95,7 +100,7 @@ curl -X POST http://localhost:8000/appeal \
   "comment_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
   "original_decision": "rejected",
   "appeal_decision": "approved",
-  "reasoning": "The user's professional credentials clarify that this was genuine expert advice, not promotional content. Appeal upheld.",
+  "reasoning": "The user's professional credentials clarify that this was genuine expert advice. Appeal upheld.",
   "timestamp": "2024-11-15T10:35:00Z"
 }
 ```
@@ -104,18 +109,38 @@ Notes:
 - Appeals are only allowed for `rejected` comments
 - Each comment may only be appealed once
 - Final decisions are `approved` or `rejected` only (no further appeals)
+- Rate limited to **5 appeals per user per 10 minutes**
 
 ---
 
 ### `GET /log`
 
-Retrieve all moderation decisions, most recent first.
+Retrieve all moderation decisions, most recent first. Supports pagination.
 
 ```bash
-curl http://localhost:8000/log
+curl "http://localhost:8000/log?page=1&limit=20"
 ```
 
-Each entry includes: `comment_id`, `user_id`, `comment`, `decision`, `confidence`, `reasoning`, `rejection_category`, `timestamp`, `appealed`, and — if appealed — `appeal_context`, `appeal_decision`, `appeal_reasoning`, `appeal_timestamp`.
+Each entry includes: `comment_id`, `user_id`, `comment`, `decision`, `confidence`, `reasoning`, `rejection_category`, `timestamp`, `appealed`, and — if appealed — full appeal details. Admin overrides are also recorded in the log.
+
+---
+
+### `PATCH /log/{comment_id}`
+
+**Admin endpoint.** Override an AI moderation decision with a human judgement.
+
+Typical use: a moderator reviews a `flagged_for_review` comment and makes a final call.
+
+```bash
+curl -X PATCH http://localhost:8000/log/3fa85f64-5717-4562-b3fc-2c963f66afa6 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "decision": "approved",
+    "note": "Verified RICS credentials — legitimate professional advice."
+  }'
+```
+
+The original AI decision is preserved alongside the override for a full audit trail.
 
 ---
 
@@ -124,18 +149,23 @@ Each entry includes: `comment_id`, `user_id`, `comment`, `decision`, `confidence
 ```
 comment-moderator/
 ├── main.py          # FastAPI app, route handlers
-├── moderator.py     # Claude prompt construction and API calls
+├── moderator.py     # Async Claude prompt construction and API calls
 ├── models.py        # Pydantic request/response/log models
 ├── storage.py       # Thread-safe in-memory moderation log
+├── rate_limiter.py  # Per-user sliding window rate limiter
+├── webhook.py       # Webhook delivery for flagged content
 ├── requirements.txt
 ├── .env.example
 └── tests/
-    └── test_api.py  # pytest suite (mocked Claude)
+    └── test_api.py  # pytest suite — 28 tests, mocked Claude
 ```
 
 ---
 
 ## Key Design Decisions
+
+### Async Claude calls
+All Claude API calls use `AsyncAnthropic`, making them fully non-blocking. The FastAPI event loop remains free to handle other incoming requests while waiting for the AI response — important under any real load, since Claude calls typically take 1–3 seconds each.
 
 ### Prompt design
 The system prompt embeds specific PropertyTribes context — the forum's topic focus (UK property investment, landlord/tenant law, HMOs), what should be approved versus rejected, and what warrants human review. This is more reliable than a generic moderation prompt because Claude has a concrete reference frame for what's on-topic and what constitutes harm in this specific community.
@@ -144,10 +174,13 @@ The system prompt embeds specific PropertyTribes context — the forum's topic f
 The appeal prompt explicitly instructs Claude **not** to simply repeat the original decision, and lists specific questions to consider (does the context clarify intent? does it provide credentials?). This prevents the common failure mode where an appeal system is cosmetically different but functionally identical to the original moderation.
 
 ### Three-outcome initial moderation
-Using `flagged_for_review` alongside `approved`/`rejected` avoids over-automation. Borderline content (e.g., borderline self-promotion, ambiguous legal claims) routes to a human rather than making a confident wrong call. Appeals, by contrast, are binary — a human has already reviewed the rejection implicitly by the time an appeal is filed.
+Using `flagged_for_review` alongside `approved`/`rejected` avoids over-automation. Borderline content routes to a human rather than making a confident wrong call. The admin override endpoint (`PATCH /log/{comment_id}`) closes this loop — moderators can action flagged content and their decision is recorded in the audit log.
 
 ### JSON extraction robustness
 Claude occasionally wraps JSON in markdown fences. The `_extract_json()` function handles both fenced and raw JSON, and all field parsing falls back gracefully — unknown decision values default to `flagged_for_review`, unknown categories default to `none`, invalid confidence values default to `0.5`.
+
+### Per-user rate limiting
+Rate limiting is keyed on `user_id` from the request body (not IP address), which is more accurate in environments where many users share an IP (e.g. corporate NAT). Uses a sliding window algorithm — limits are 30 moderate requests/minute and 5 appeal requests/10 minutes per user. A secondary IP-based limit via `slowapi` acts as a hard ceiling.
 
 ### Separation of concerns
 `moderator.py` only knows about AI logic. `main.py` only knows about HTTP. `storage.py` only knows about data. This makes each layer independently testable and swappable — e.g., replacing Claude with another LLM requires changing only `moderator.py`.
@@ -156,9 +189,13 @@ Claude occasionally wraps JSON in markdown fences. The `_extract_json()` functio
 
 ## Bonus Features Included
 
-- **Rate limiting** — 30 moderate requests/minute and 10 appeal requests/minute per IP (via `slowapi`)
+- **Async AI calls** — `AsyncAnthropic` keeps the event loop non-blocking under load
+- **Rate limiting** — per-user sliding window (30 req/min for moderation, 5/10min for appeals) plus IP-based ceiling
 - **Rejection categorisation** — `spam`, `hate_speech`, `misinformation`, `off_topic`, `abusive`, `promotional`
-- **Unit tests** — full pytest suite with mocked Claude; tests edge cases, error paths, and the double-appeal guard
+- **Webhook on flagged content** — configurable `WEBHOOK_URL` receives a POST when content is flagged; use [webhook.site](https://webhook.site) to test
+- **Admin override endpoint** — `PATCH /log/{comment_id}` for human moderators to make final calls on flagged content
+- **Paginated log** — `GET /log?page=1&limit=20`
+- **Unit tests** — 28 pytest tests covering happy paths, edge cases, rate limiting, and webhook behaviour
 
 ---
 
@@ -173,10 +210,9 @@ Claude occasionally wraps JSON in markdown fences. The `_extract_json()` functio
 
 ## What I'd Improve With More Time
 
-1. **Persistent storage** — swap the in-memory dict for SQLite or PostgreSQL; add a migration layer
-2. **Webhook on flagged content** — POST to a configurable URL when a comment is flagged for human review, so moderators get real-time notifications
-3. **Async Claude calls** — use `anthropic.AsyncAnthropic` so the FastAPI event loop isn't blocked during AI inference
-4. **Per-user rate limiting** — rate limit by `user_id` in addition to IP for more accurate abuse prevention
-5. **Confidence calibration** — log Claude's decisions alongside eventual human override outcomes and use that data to tune prompts over time
-6. **Streaming responses** — for very long reasoning, stream the Claude response to reduce perceived latency
-7. **Admin endpoint** — `PATCH /log/{comment_id}` for human moderators to override flagged decisions
+1. **Persistent storage** — swap the in-memory dict for SQLite or PostgreSQL with a migration layer (Alembic)
+2. **Authentication** — API key or JWT on every endpoint; the admin override especially should be protected
+3. **Confidence calibration** — log Claude's decisions alongside human override outcomes and use that data to tune prompts over time
+4. **Streaming responses** — stream Claude's reasoning for faster perceived latency on long responses
+5. **Appeal expiry** — appeals should time out after e.g. 7 days so old rejections can't be reopened indefinitely
+6. **Async webhook delivery** — move webhook calls to a background task so they don't add any latency to the main response

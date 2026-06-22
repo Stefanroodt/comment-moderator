@@ -27,6 +27,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from models import (
+    AdminOverrideRequest,
     AppealRequest,
     AppealResponse,
     CommentRequest,
@@ -119,7 +120,7 @@ async def moderate(request: Request, body: CommentRequest) -> ModerationResponse
         )
 
     try:
-        result = moderate_comment(body.comment)
+        result = await moderate_comment(body.comment)
     except anthropic.APIError as exc:
         return _ai_error_response(exc)
     except Exception as exc:
@@ -220,7 +221,7 @@ async def appeal(request: Request, body: AppealRequest) -> AppealResponse:
         )
 
     try:
-        result = moderate_appeal(entry.comment, body.appeal_context)
+        result = await moderate_appeal(entry.comment, body.appeal_context)
     except anthropic.APIError as exc:
         return _ai_error_response(exc)
     except Exception as exc:
@@ -272,6 +273,56 @@ async def get_log(
     start = (page - 1) * limit
     end = start + limit
     return [e.model_dump(mode="json") for e in entries[start:end]]
+
+
+# ---------------------------------------------------------------------------
+# Admin override endpoint
+# ---------------------------------------------------------------------------
+
+@app.patch(
+    "/log/{comment_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Admin: override a moderation decision",
+)
+async def admin_override(comment_id: str, body: AdminOverrideRequest) -> Dict[str, Any]:
+    """
+    Allow a human moderator to override any AI moderation decision.
+
+    Typical use case: a comment was `flagged_for_review` and a moderator
+    has reviewed it and wants to set a final `approved` or `rejected` decision.
+
+    The original AI decision and reasoning are preserved in the log alongside
+    the override, creating a full audit trail.
+    """
+    from uuid import UUID as _UUID
+    try:
+        uid = _UUID(comment_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid comment_id format: {comment_id!r}",
+        )
+
+    updated = store.record_admin_override(
+        comment_id=uid,
+        decision=body.decision,
+        note=body.note,
+    )
+
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No moderation record found for comment_id={comment_id}.",
+        )
+
+    logger.info(
+        "Admin override for comment %s → %s (note: %s)",
+        comment_id,
+        body.decision.value,
+        body.note or "none",
+    )
+
+    return updated.model_dump(mode="json")
 
 
 # ---------------------------------------------------------------------------

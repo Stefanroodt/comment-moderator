@@ -132,3 +132,24 @@ class LogEntry(BaseModel):
     appeal_decision: Optional[FinalDecision] = None
     appeal_reasoning: Optional[str] = None
     appeal_timestamp: Optional[datetime] = None
+    # Admin override fields
+    admin_overridden: bool = False
+    admin_decision: Optional[ModerationDecision] = None
+    admin_note: Optional[str] = None
+    admin_timestamp: Optional[datetime] = None
+
+
+# ---------------------------------------------------------------------------
+# Admin override request
+# ---------------------------------------------------------------------------
+
+class AdminOverrideRequest(BaseModel):
+    decision: ModerationDecision = Field(
+        ...,
+        description="The corrected decision to apply.",
+    )
+    note: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description="Optional note explaining the override (e.g. 'Approved — verified professional credentials').",
+    )

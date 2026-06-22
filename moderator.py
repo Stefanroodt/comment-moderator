@@ -105,18 +105,30 @@ FLAG FOR REVIEW (human moderator should decide):
 def _extract_json(text: str) -> Dict[str, Any]:
     """
     Extract a JSON object from Claude's response text.
-    Claude may wrap JSON in markdown code fences — this handles both cases.
+
+    Two strategies, in order:
+    1. Markdown code fence — if Claude wrapped the JSON in ```json ... ```
+    2. raw_decode scan — walk the string from each '{' and try to parse a
+       complete JSON object. This avoids the greedy r'{.*}' regex which
+       over-captures when prose contains stray braces before the real JSON.
     """
+    # 1. Explicit markdown fence
     json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if json_match:
-        raw = json_match.group(1)
-    else:
-        brace_match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not brace_match:
-            raise ValueError(f"No JSON object found in AI response: {text!r}")
-        raw = brace_match.group(0)
+        return json.loads(json_match.group(1))
 
-    return json.loads(raw)
+    # 2. Scan for the first syntactically valid JSON object
+    decoder = json.JSONDecoder()
+    for i, char in enumerate(text):
+        if char == "{":
+            try:
+                obj, _ = decoder.raw_decode(text, i)
+                if isinstance(obj, dict):
+                    return obj
+            except json.JSONDecodeError:
+                continue
+
+    raise ValueError(f"No valid JSON object found in AI response: {text!r}")
 
 
 def _safe_decision(value: str, fallback: ModerationDecision) -> ModerationDecision:
@@ -279,7 +291,27 @@ Notes:
     raw_text = message.content[0].text
     logger.debug("Claude raw response: %s", raw_text)
 
-    parsed = _extract_json(raw_text)
+    # Truncated response — partial JSON can't be trusted; fail closed
+    if message.stop_reason == "max_tokens":
+        logger.warning("Claude response truncated (max_tokens) — failing closed to flagged_for_review")
+        return {
+            "decision": ModerationDecision.FLAGGED_FOR_REVIEW,
+            "confidence": 0.5,
+            "reasoning": "Response was truncated before completion — flagged for human review.",
+            "rejection_category": RejectionCategory.NONE,
+        }
+
+    # Fail-safe: unparseable response → flag for human review, never 502
+    try:
+        parsed = _extract_json(raw_text)
+    except ValueError as exc:
+        logger.warning("Could not parse Claude response — failing closed to flagged_for_review: %s", exc)
+        return {
+            "decision": ModerationDecision.FLAGGED_FOR_REVIEW,
+            "confidence": 0.5,
+            "reasoning": "Moderation response could not be parsed — flagged for human review.",
+            "rejection_category": RejectionCategory.NONE,
+        }
 
     return {
         "decision": _safe_decision(parsed.get("decision", "flagged_for_review"), ModerationDecision.FLAGGED_FOR_REVIEW),
@@ -289,27 +321,48 @@ Notes:
     }
 
 
-async def moderate_appeal(original_comment: str, appeal_context: str) -> Dict[str, Any]:
+async def moderate_appeal(
+    original_comment: str,
+    appeal_context: str,
+    original_decision: str,
+    rejection_category: str,
+    original_reasoning: str,
+    tribe: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Async: re-evaluate a rejected comment in light of the user's appeal context.
 
-    The prompt explicitly instructs Claude to genuinely reconsider — not just
-    rubber-stamp the original decision. Returns a dict with:
-        appeal_decision, reasoning
+    Passes the original decision, rejection category, reasoning, and tribe into
+    the prompt so Claude can directly address the specific objection rather than
+    re-evaluating blind. Returns a dict with: appeal_decision, reasoning.
     """
+    # Reuse the same tribe context the original decision was made under
+    if tribe:
+        tribe_note = TRIBE_GUIDANCE.get(tribe)
+        if tribe_note:
+            tribe_section = f"\nTRIBE-SPECIFIC RULES for '{tribe}' (same rules applied in original decision):\n{tribe_note}"
+        else:
+            tribe_section = f"\nThis comment was posted in the '{tribe}' tribe."
+    else:
+        tribe_section = ""
+
     prompt = f"""
 {FORUM_CONTEXT}
+{tribe_section}
 
 ---
 
 A user is appealing a moderation decision on PropertyTribes. Your job is to conduct a
-GENUINE re-evaluation. Do not simply repeat the original rejection. Carefully read the
-user's context and determine whether it changes your assessment.
+GENUINE re-evaluation. Do not simply repeat the original rejection.
 
-Original comment (previously rejected):
+Original comment (decision: {original_decision}):
 <comment>
 {original_comment}
 </comment>
+
+Why it was {original_decision}:
+- Rejection category: {rejection_category}
+- Reasoning: {original_reasoning}
 
 User's appeal explanation:
 <appeal_context>
@@ -317,14 +370,14 @@ User's appeal explanation:
 </appeal_context>
 
 Consider:
-1. Does the appeal context clarify the intent of the comment?
-2. Does it provide professional credentials or evidence that change the risk assessment?
+1. Does the appeal context directly address the specific reason for rejection?
+2. Does it provide credentials, evidence, or clarification that changes the risk assessment?
 3. Would a reasonable PropertyTribes moderator approve this with the additional context?
 
 This is a FINAL decision — there are no further appeals. Respond with ONLY a JSON object:
 {{
   "appeal_decision": "<approved | rejected>",
-  "reasoning": "<2-4 sentence explanation that acknowledges the appeal context>"
+  "reasoning": "<2-4 sentence explanation that directly addresses the original rejection reason>"
 }}
 """.strip()
 
@@ -339,7 +392,15 @@ This is a FINAL decision — there are no further appeals. Respond with ONLY a J
     raw_text = message.content[0].text
     logger.debug("Claude appeal raw response: %s", raw_text)
 
-    parsed = _extract_json(raw_text)
+    # Fail-safe: unparseable response → uphold original rejection
+    try:
+        parsed = _extract_json(raw_text)
+    except ValueError as exc:
+        logger.warning("Could not parse Claude appeal response — upholding original rejection: %s", exc)
+        return {
+            "appeal_decision": FinalDecision.REJECTED,
+            "reasoning": "Appeal response could not be parsed — original decision upheld.",
+        }
 
     raw_decision = parsed.get("appeal_decision", "rejected")
     try:

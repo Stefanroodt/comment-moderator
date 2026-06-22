@@ -162,6 +162,30 @@ class TestModerateEdgeCases:
             resp = client.post("/moderate", json={"user_id": "u1", "comment": "test"})
         assert resp.status_code == 502
 
+    def test_unparseable_ai_response_fails_to_flagged(self):
+        """When Claude returns prose with no valid JSON, the API fails closed to flagged_for_review — not 502."""
+        from unittest.mock import AsyncMock, MagicMock
+        mock_msg = MagicMock()
+        mock_msg.stop_reason = "end_turn"
+        mock_msg.content = [MagicMock(text="I think this comment is fine, probably {just approve} it.")]
+        with patch("moderator._get_client") as mock_client:
+            mock_client.return_value.messages.create = AsyncMock(return_value=mock_msg)
+            resp = client.post("/moderate", json={"user_id": "u1", "comment": "test comment"})
+        assert resp.status_code == 200
+        assert resp.json()["decision"] == "flagged_for_review"
+
+    def test_max_tokens_response_fails_to_flagged(self):
+        """A truncated response (stop_reason=max_tokens) fails closed to flagged_for_review."""
+        from unittest.mock import AsyncMock, MagicMock
+        mock_msg = MagicMock()
+        mock_msg.stop_reason = "max_tokens"
+        mock_msg.content = [MagicMock(text='{"decision": "approved", "confidence": 0.9, "reason')]
+        with patch("moderator._get_client") as mock_client:
+            mock_client.return_value.messages.create = AsyncMock(return_value=mock_msg)
+            resp = client.post("/moderate", json={"user_id": "u1", "comment": "test comment"})
+        assert resp.status_code == 200
+        assert resp.json()["decision"] == "flagged_for_review"
+
 
 # ---------------------------------------------------------------------------
 # POST /appeal — happy paths
@@ -306,6 +330,16 @@ class TestLog:
         ids1 = {e["comment_id"] for e in page1}
         ids2 = {e["comment_id"] for e in page2}
         assert ids1.isdisjoint(ids2)
+
+    def test_page_zero_returns_422(self):
+        """page=0 is invalid — pages are 1-indexed."""
+        resp = client.get("/log?page=0")
+        assert resp.status_code == 422
+
+    def test_limit_too_large_returns_422(self):
+        """limit above 100 is rejected."""
+        resp = client.get("/log?limit=101")
+        assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------

@@ -23,7 +23,7 @@ from uuid import uuid4
 load_dotenv()
 
 import anthropic
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -226,7 +226,14 @@ async def appeal(request: Request, body: AppealRequest) -> AppealResponse:
         )
 
     try:
-        result = await moderate_appeal(entry.comment, body.appeal_context)
+        result = await moderate_appeal(
+            entry.comment,
+            body.appeal_context,
+            original_decision=entry.decision.value,
+            rejection_category=entry.rejection_category.value,
+            original_reasoning=entry.reasoning,
+            tribe=entry.tribe,
+        )
     except anthropic.APIError as exc:
         return _ai_error_response(exc)
     except Exception as exc:
@@ -263,8 +270,8 @@ async def appeal(request: Request, body: AppealRequest) -> AppealResponse:
     summary="Retrieve the full moderation log",
 )
 async def get_log(
-    page: int = 1,
-    limit: int = 20,
+    page: int = Query(1, ge=1, description="Page number (1-indexed)."),
+    limit: int = Query(20, ge=1, le=100, description="Results per page (max 100)."),
 ) -> List[Dict[str, Any]]:
     """
     Returns moderation decisions in reverse-chronological order.

@@ -55,7 +55,7 @@ Unit tests don't need a running server or real API key — Claude is mocked:
 pytest tests/ -v
 ```
 
-44 tests, runs in about a second.
+48 tests, runs in about a second.
 
 ---
 

@@ -552,3 +552,80 @@ class TestStats:
         data = client.get("/stats?since=2099-01-01T00:00:00Z").json()
         assert data["total_comments"] == 0
         assert data["avg_confidence"] is None
+
+
+# ---------------------------------------------------------------------------
+# Tribe-aware moderation
+# ---------------------------------------------------------------------------
+
+class TestTribeAwareness:
+
+    def test_no_tribe_still_works(self):
+        """Omitting tribe is fine — backward compatible."""
+        with patch("main.moderate_comment", return_value=APPROVED_RESULT) as mock:
+            resp = client.post("/moderate", json={
+                "user_id": "u1",
+                "comment": "Good property question.",
+            })
+        assert resp.status_code == 200
+        mock.assert_called_once_with("Good property question.", tribe=None)
+
+    def test_known_tribe_is_passed_to_moderator(self):
+        """A known tribe name is forwarded to moderate_comment."""
+        with patch("main.moderate_comment", return_value=APPROVED_RESULT) as mock:
+            resp = client.post("/moderate", json={
+                "user_id": "u1",
+                "comment": "Looking for a good letting agent in Leeds.",
+                "tribe": "Wanted & Recommendations",
+            })
+        assert resp.status_code == 200
+        mock.assert_called_once_with(
+            "Looking for a good letting agent in Leeds.",
+            tribe="Wanted & Recommendations",
+        )
+
+    def test_unknown_tribe_falls_back_gracefully(self):
+        """An unrecognised tribe name is accepted — falls back to generic rules."""
+        with patch("main.moderate_comment", return_value=APPROVED_RESULT) as mock:
+            resp = client.post("/moderate", json={
+                "user_id": "u1",
+                "comment": "Interesting post about property.",
+                "tribe": "Some Future Tribe Not In Our List",
+            })
+        assert resp.status_code == 200
+        mock.assert_called_once_with(
+            "Interesting post about property.",
+            tribe="Some Future Tribe Not In Our List",
+        )
+
+    def test_tribe_is_stored_in_log(self):
+        """Tribe is persisted in the log entry and visible in GET /log."""
+        with patch("main.moderate_comment", return_value=REJECTED_RESULT):
+            client.post("/moderate", json={
+                "user_id": "u1",
+                "comment": "Buy my course!",
+                "tribe": "HMO Landlords",
+            })
+        log = client.get("/log").json()
+        assert log[0]["tribe"] == "HMO Landlords"
+
+    def test_tribe_field_too_long_rejected(self):
+        """Tribe names over 100 characters fail validation."""
+        resp = client.post("/moderate", json={
+            "user_id": "u1",
+            "comment": "Good question.",
+            "tribe": "T" * 101,
+        })
+        assert resp.status_code == 422
+
+    def test_tribe_specific_prompt_content(self):
+        """TRIBE_GUIDANCE contains entries for key PropertyTribes tribes."""
+        from moderator import TRIBE_GUIDANCE
+        assert "Wanted & Recommendations" in TRIBE_GUIDANCE
+        assert "No Money Down (NMD)" in TRIBE_GUIDANCE
+        assert "Problem Tenants" in TRIBE_GUIDANCE
+        assert "HMO Landlords" in TRIBE_GUIDANCE
+        # NMD tribe should flag higher scrutiny
+        assert "HIGHER SCRUTINY" in TRIBE_GUIDANCE["No Money Down (NMD)"]
+        # Wanted & Recommendations should allow self-promotion
+        assert "approve" in TRIBE_GUIDANCE["Wanted & Recommendations"].lower()

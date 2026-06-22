@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import anthropic
 
@@ -142,18 +142,94 @@ def _clamp_confidence(value: Any) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Tribe-specific moderation guidance
+# Each entry overrides or supplements the general FORUM_CONTEXT rules
+# for comments posted in that specific PropertyTribes tribe.
+# ---------------------------------------------------------------------------
+
+TRIBE_GUIDANCE: Dict[str, str] = {
+    "Wanted & Recommendations": (
+        "This tribe exists specifically for members to recommend or request services, "
+        "tradespeople, solicitors, letting agents, and suppliers. Self-promotion and "
+        "advertising services IS the point here — approve unless the content is fraudulent, "
+        "abusive, or completely unrelated to property."
+    ),
+    "Property Seminars & Events": (
+        "This tribe is for promoting property-related seminars, training events, and "
+        "networking. Event listings and course promotions are expected and should be "
+        "approved. Flag content using high-pressure tactics or claiming guaranteed returns."
+    ),
+    "Products & Services": (
+        "Members post here specifically to advertise property-related products and services. "
+        "Commercial promotion is acceptable. Reject only if the product is unrelated to "
+        "property or the listing is clearly fraudulent."
+    ),
+    "No Money Down (NMD)": (
+        "HIGHER SCRUTINY REQUIRED. This tribe discusses 'no money down' and creative finance "
+        "strategies. These can be legitimate but the topic attracts scams and misleading "
+        "claims. Be especially suspicious of guaranteed returns, off-platform contact "
+        "requests, or unverifiable claims. Prefer flagging over approving when uncertain."
+    ),
+    "Problem Tenants": (
+        "Landlords venting about difficult tenants often use strong, frustrated language — "
+        "this is normal and acceptable in this tribe. Approve content that discusses genuine "
+        "landlord difficulties even if the tone is harsh. Only reject if it targets named "
+        "individuals with harassment or contains hate speech."
+    ),
+    "HMO Landlords": (
+        "Technical discussion tribe for HMO (House in Multiple Occupation) landlords. "
+        "Discussing Article 4 directions, mandatory licensing, room sizes, fire safety, "
+        "and tenant management is all on-topic. Self-promotion is NOT appropriate here — "
+        "reject undisclosed advertising."
+    ),
+    "Rent to Rent": (
+        "Legitimate strategy discussion but this tribe attracts 'guru' content selling "
+        "systems and courses. Flag content that promotes paid programmes without clear "
+        "transparency about cost and affiliation. Strategy discussion itself is fine."
+    ),
+    "Tax": (
+        "Members share tax strategies and experiences. General tax advice and discussion "
+        "is acceptable community knowledge-sharing. Flag content that appears to be "
+        "soliciting clients for unregulated tax advice services."
+    ),
+    "New Landlords": (
+        "Beginner-friendly tribe. Members here are new and potentially more vulnerable to "
+        "misleading advice. Apply extra scrutiny to comments promoting get-rich-quick "
+        "schemes or unverified legal and tax claims."
+    ),
+    "Scottish PRS": (
+        "Covers the Scottish Private Rented Sector, which has distinct legislation from "
+        "England and Wales — different eviction rules, rent controls, and tribunal processes. "
+        "Accept Scotland-specific landlord content even if it references laws that differ "
+        "from the English system."
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
 # Public async API
 # ---------------------------------------------------------------------------
 
-async def moderate_comment(comment: str) -> Dict[str, Any]:
+async def moderate_comment(comment: str, tribe: Optional[str] = None) -> Dict[str, Any]:
     """
     Async: send a comment to Claude for moderation.
 
     Returns a dict with keys:
         decision, confidence, reasoning, rejection_category
     """
+    # Build tribe-specific context block if a tribe was provided
+    if tribe:
+        tribe_note = TRIBE_GUIDANCE.get(tribe)
+        if tribe_note:
+            tribe_section = f"\nTRIBE-SPECIFIC RULES for '{tribe}':\n{tribe_note}"
+        else:
+            tribe_section = f"\nThis comment was posted in the '{tribe}' tribe. Apply standard PropertyTribes moderation guidelines for this topic area."
+    else:
+        tribe_section = ""
+
     prompt = f"""
 {FORUM_CONTEXT}
+{tribe_section}
 
 ---
 
@@ -180,7 +256,7 @@ Notes:
 - reasoning should be concise but specific enough to justify a moderation action
 """.strip()
 
-    logger.info("Sending comment to Claude for moderation (length=%d)", len(comment))
+    logger.info("Sending comment to Claude for moderation (length=%d, tribe=%s)", len(comment), tribe or "none")
 
     message = await _get_client().messages.create(
         model=MODEL,

@@ -121,7 +121,7 @@ async def moderate(request: Request, body: CommentRequest) -> ModerationResponse
         )
 
     try:
-        result = await moderate_comment(body.comment)
+        result = await moderate_comment(body.comment, tribe=body.tribe)
     except anthropic.APIError as exc:
         return _ai_error_response(exc)
     except Exception as exc:
@@ -134,6 +134,7 @@ async def moderate(request: Request, body: CommentRequest) -> ModerationResponse
         comment_id=comment_id,
         user_id=body.user_id,
         comment=body.comment,
+        tribe=body.tribe,
         decision=result["decision"],
         confidence=result["confidence"],
         reasoning=result["reasoning"],

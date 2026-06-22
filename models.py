@@ -58,6 +58,18 @@ class CommentRequest(BaseModel):
         description="The comment text to moderate.",
         examples=["Has anyone had experience with HMO licensing in Manchester?"],
     )
+    tribe: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+        description=(
+            "The PropertyTribes tribe this comment was posted in. "
+            "When provided, tribe-specific moderation rules are applied — "
+            "e.g. self-promotion is acceptable in 'Wanted & Recommendations' "
+            "but rejected in 'HMO Landlords'."
+        ),
+        examples=["HMO Landlords"],
+    )
 
     @field_validator("comment")
     @classmethod
@@ -122,6 +134,7 @@ class LogEntry(BaseModel):
     comment_id: UUID
     user_id: str
     comment: str
+    tribe: Optional[str] = None
     decision: ModerationDecision
     confidence: float
     reasoning: str

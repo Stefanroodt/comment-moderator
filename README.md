@@ -10,7 +10,7 @@ Comment moderation API for [PropertyTribes](https://www.propertytribes.com/) bui
 - Anthropic API key
 - Python 3.9+ or Docker
 
-### Docker (easiest)
+### Docker (quickest for dev)
 
 ```bash
 git clone https://github.com/Stefanroodt/comment-moderator.git
@@ -18,6 +18,8 @@ cd comment-moderator
 cp .env.example .env   # add your key here
 docker compose up
 ```
+
+This mounts source and runs with `--reload`. For production, remove the volume mount and the reload flag.
 
 ### Python
 
@@ -186,6 +188,8 @@ comment-moderator/
 - Comments are plain text
 - No auth layer — user identity is trusted from the request body
 - In-memory storage resets on restart (as per the spec)
+- `GET /log` and `GET /stats` are unauthenticated — they expose `user_id`s and comment content to anyone who can reach the API. In production these would sit behind an internal network boundary or require an API key.
+- Logs do not record comment text or `user_id` at INFO level or above; only `comment_id`, decision, and confidence are emitted to limit PII exposure.
 
 ---
 

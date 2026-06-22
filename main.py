@@ -31,7 +31,6 @@ from models import (
     AppealRequest,
     AppealResponse,
     CommentRequest,
-    FinalDecision,
     LogEntry,
     ModerationDecision,
     ModerationResponse,
@@ -144,10 +143,10 @@ async def moderate(request: Request, body: CommentRequest) -> ModerationResponse
     )
     store.add(entry)
 
+    # user_id and comment text are intentionally excluded from logs to limit PII exposure.
     logger.info(
-        "Moderated comment %s for user %s → %s (confidence=%.2f)",
+        "Moderated comment %s → %s (confidence=%.2f)",
         comment_id,
-        body.user_id,
         result["decision"].value,
         result["confidence"],
     )
@@ -266,14 +265,14 @@ async def appeal(request: Request, body: AppealRequest) -> AppealResponse:
 
 @app.get(
     "/log",
-    response_model=List[Dict[str, Any]],
+    response_model=List[LogEntry],
     status_code=status.HTTP_200_OK,
     summary="Retrieve the full moderation log",
 )
 async def get_log(
     page: int = Query(1, ge=1, description="Page number (1-indexed)."),
     limit: int = Query(20, ge=1, le=100, description="Results per page (max 100)."),
-) -> List[Dict[str, Any]]:
+) -> List[LogEntry]:
     """
     Returns moderation decisions in reverse-chronological order.
 
@@ -285,7 +284,7 @@ async def get_log(
 
     start = (page - 1) * limit
     end = start + limit
-    return [e.model_dump(mode="json") for e in entries[start:end]]
+    return entries[start:end]
 
 
 # ---------------------------------------------------------------------------

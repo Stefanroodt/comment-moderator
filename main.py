@@ -111,7 +111,6 @@ async def moderate(request: Request, body: CommentRequest) -> ModerationResponse
     a confidence score, a brief reasoning, and a rejection category if applicable.
 
     Rate limited to 30 requests per user per minute (per user_id).
-    A secondary IP-based limit of 60/minute acts as a hard ceiling.
     """
     # Per-user rate limit (keyed on user_id from body)
     if not moderate_limiter.is_allowed(body.user_id):

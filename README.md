@@ -7,10 +7,25 @@ Automatic comment moderation for [PropertyTribes](https://www.propertytribes.com
 ## Setup (< 5 minutes)
 
 ### Prerequisites
-- Python 3.9+
 - An [Anthropic API key](https://console.anthropic.com/)
+- Python 3.9+ **or** Docker
 
-### 1. Clone and install
+---
+
+### Option A — Docker (recommended, zero config)
+
+```bash
+git clone https://github.com/Stefanroodt/comment-moderator.git
+cd comment-moderator
+cp .env.example .env          # Add your ANTHROPIC_API_KEY
+docker compose up
+```
+
+API live at `http://localhost:8000` — no Python install needed.
+
+---
+
+### Option B — Python
 
 ```bash
 git clone https://github.com/Stefanroodt/comment-moderator.git
@@ -36,13 +51,35 @@ uvicorn main:app --reload
 
 The API is live at `http://localhost:8000`. Interactive docs at `http://localhost:8000/docs`.
 
-### 4. Run tests
+---
+
+## Testing the API
+
+### Option 1 — Interactive docs (easiest)
+
+Open `http://localhost:8000/docs` in your browser. FastAPI generates a full UI — fill in fields and click Execute.
+
+### Option 2 — Demo script (full flow in one command)
+
+```bash
+brew install jq       # required for JSON parsing
+chmod +x demo.sh
+./demo.sh
+```
+
+Runs the complete flow automatically: approve, reject, appeal, admin override, and log — no copy-pasting needed.
+
+### Option 3 — Postman
+
+Import `postman_collection.json` into Postman. All 4 endpoints are pre-configured with example bodies, auto-saved `comment_id`, and test assertions. Run the collection in order.
+
+### Option 4 — Unit tests (no server or API key needed)
 
 ```bash
 pytest tests/ -v
 ```
 
-Tests mock the Claude API — no key required, runs in ~2 seconds.
+28 tests, mocked Claude API, runs in ~2 seconds.
 
 ---
 

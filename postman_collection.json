@@ -1,0 +1,290 @@
+{
+  "info": {
+    "name": "AI Comment Moderator",
+    "description": "PropertyTribes AI comment moderation API. Run the requests in order to see the full moderation + appeal flow.\n\nSetup:\n1. Start the server: uvicorn main:app --reload\n2. Import this collection into Postman\n3. Run requests in order — comment_id is auto-saved from /moderate responses",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "comment_id",
+      "value": "",
+      "type": "string",
+      "description": "Auto-populated from the /moderate response"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Moderate — Approve (legitimate question)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.collectionVariables.set('comment_id', json.comment_id);",
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "pm.test('Has decision', () => pm.expect(json.decision).to.be.oneOf(['approved', 'rejected', 'flagged_for_review']));",
+              "pm.test('Has confidence', () => pm.expect(json.confidence).to.be.a('number'));",
+              "pm.test('Has reasoning', () => pm.expect(json.reasoning).to.be.a('string'));",
+              "console.log('Decision:', json.decision, '| Confidence:', json.confidence);",
+              "console.log('comment_id saved:', json.comment_id);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"landlord_dave\",\n  \"comment\": \"Has anyone dealt with Article 4 directions for HMOs in Manchester? I have a 5-bed property and I'm unsure whether I need an additional licence on top of mandatory HMO licensing.\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/moderate",
+          "host": ["{{base_url}}"],
+          "path": ["moderate"]
+        },
+        "description": "Submit a legitimate landlord question. Expect: approved.\n\nThe comment_id is auto-saved to the collection variable for use in the appeal request."
+      }
+    },
+    {
+      "name": "2. Moderate — Reject (spam)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.collectionVariables.set('comment_id', json.comment_id);",
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "pm.test('Has rejection category', () => pm.expect(json.rejection_category).to.not.equal('none'));",
+              "console.log('Decision:', json.decision, '| Category:', json.rejection_category);",
+              "console.log('Saved comment_id for appeal:', json.comment_id);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"spammer_99\",\n  \"comment\": \"Check out my website for the BEST property leads in the UK! Limited time offer — DM me now for exclusive deals and guaranteed returns!\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/moderate",
+          "host": ["{{base_url}}"],
+          "path": ["moderate"]
+        },
+        "description": "Submit an obvious spam comment. Expect: rejected with category 'spam' or 'promotional'.\n\nThe comment_id is auto-saved for the appeal request below."
+      }
+    },
+    {
+      "name": "3. Moderate — Flag (borderline)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "console.log('Decision:', json.decision, '| Confidence:', json.confidence);",
+              "console.log('Reasoning:', json.reasoning);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"seminar_host\",\n  \"comment\": \"I run property investment workshops in London — next one is next Saturday. We cover buy-to-let strategy, HMO setup, and tax efficiency. Visit my site for details.\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/moderate",
+          "host": ["{{base_url}}"],
+          "path": ["moderate"]
+        },
+        "description": "Submit a borderline self-promotional comment. Expect: flagged_for_review.\n\nA human moderator should decide whether this is legitimate event promotion or spam."
+      }
+    },
+    {
+      "name": "4. Appeal — Rejected comment",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "pm.test('Final decision is binary', () => pm.expect(json.appeal_decision).to.be.oneOf(['approved', 'rejected']));",
+              "pm.test('Has reasoning', () => pm.expect(json.reasoning).to.be.a('string'));",
+              "console.log('Original:', json.original_decision, '→ Appeal:', json.appeal_decision);",
+              "console.log('Reasoning:', json.reasoning);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"comment_id\": \"{{comment_id}}\",\n  \"appeal_context\": \"I am a RICS-qualified surveyor with 15 years of experience helping landlords source investment properties. My comment was intended as a professional service introduction. I am happy to disclose my credentials and remove any urgency language.\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/appeal",
+          "host": ["{{base_url}}"],
+          "path": ["appeal"]
+        },
+        "description": "Appeal the rejected comment from request #2.\n\nThe comment_id is auto-populated from the previous response. The AI re-evaluates the original comment alongside this professional context.\n\nThis is a FINAL decision — approved or rejected, no further appeals."
+      }
+    },
+    {
+      "name": "5. Admin Override — Flagged comment",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "pm.test('Admin overridden is true', () => pm.expect(json.admin_overridden).to.be.true);",
+              "console.log('Admin decision:', json.admin_decision);",
+              "console.log('Note:', json.admin_note);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "PATCH",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"decision\": \"approved\",\n  \"note\": \"Verified organiser — event is legitimate. Approved for Property Seminars tribe.\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/log/PASTE_FLAGGED_COMMENT_ID_HERE",
+          "host": ["{{base_url}}"],
+          "path": ["log", "PASTE_FLAGGED_COMMENT_ID_HERE"]
+        },
+        "description": "Human moderator overrides the AI's flagged_for_review decision.\n\nReplace PASTE_FLAGGED_COMMENT_ID_HERE in the URL with the comment_id from request #3.\n\nThe original AI decision is preserved alongside the override for a full audit trail."
+      }
+    },
+    {
+      "name": "6. Get Log (paginated)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "pm.test('Returns array', () => pm.expect(json).to.be.an('array'));",
+              "console.log('Log entries returned:', json.length);",
+              "json.forEach(e => console.log(e.decision, '|', e.comment.substring(0, 60)));"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/log?page=1&limit=20",
+          "host": ["{{base_url}}"],
+          "path": ["log"],
+          "query": [
+            { "key": "page", "value": "1" },
+            { "key": "limit", "value": "20" }
+          ]
+        },
+        "description": "Retrieve the full moderation log, most recent first.\n\nSupports pagination: ?page=1&limit=20\n\nEach entry includes the original comment, AI decision, confidence, reasoning, timestamp, and any appeal or admin override details."
+      }
+    },
+    {
+      "name": "7. Edge Case — Empty comment (expect 422)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 422 (validation error)', () => pm.response.to.have.status(422));",
+              "console.log('Correctly rejected empty comment');"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"user1\",\n  \"comment\": \"\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/moderate",
+          "host": ["{{base_url}}"],
+          "path": ["moderate"]
+        },
+        "description": "Edge case: empty comment should be rejected with a 422 validation error before hitting the AI."
+      }
+    },
+    {
+      "name": "8. Edge Case — Double appeal (expect 409)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 409 (conflict — already appealed)', () => pm.response.to.have.status(409));",
+              "console.log('Correctly blocked second appeal');"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"comment_id\": \"{{comment_id}}\",\n  \"appeal_context\": \"I want to appeal again — please reconsider!\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/appeal",
+          "host": ["{{base_url}}"],
+          "path": ["appeal"]
+        },
+        "description": "Edge case: attempting to appeal a comment that has already been appealed should return 409 Conflict."
+      }
+    }
+  ]
+}
